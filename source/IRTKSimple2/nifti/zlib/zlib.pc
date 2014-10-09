@@ -1,0 +1,13 @@
+prefix=C:/Program Files/FetalReconstruction
+exec_prefix=C:/Program Files/FetalReconstruction
+libdir=C:/Program Files/FetalReconstruction/lib
+sharedlibdir=C:/Program Files/FetalReconstruction/lib
+includedir=C:/Program Files/FetalReconstruction/include
+
+Name: zlib
+Description: zlib compression library
+Version: 1.2.7
+
+Requires:
+Libs: -L${libdir} -L${sharedlibdir} -lz
+Cflags: -I${includedir}

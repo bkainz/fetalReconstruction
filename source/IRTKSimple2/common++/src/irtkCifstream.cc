@@ -1,0 +1,150 @@
+/*=========================================================================
+
+  Library   : Image Registration Toolkit (IRTK)
+  Module    : $Id: irtkCifstream.cc 565 2012-03-11 18:22:27Z dr $
+  Copyright : Imperial College, Department of Computing
+              Visual Information Processing (VIP), 2008 onwards
+  Date      : $Date: 2012-03-11 18:22:27 +0000 (Sun, 11 Mar 2012) $
+  Version   : $Revision: 565 $
+  Changes   : $Author: dr $
+
+=========================================================================*/
+
+#include <irtkCommon.h>
+
+irtkCifstream::irtkCifstream()
+{
+  _file = NULL;
+#ifndef WORDS_BIGENDIAN
+  _swapped = true;
+#else
+  _swapped = false;
+#endif
+#ifdef ENABLE_UNIX_COMPRESS
+  _pos = 0;
+#endif
+}
+
+irtkCifstream::~irtkCifstream()
+{
+  this->Close();
+}
+
+void irtkCifstream::Read(char *mem, long start, long num)
+{
+  // Read data uncompressed
+#ifdef ENABLE_UNIX_COMPRESS
+  if (start == -1) {
+    ReadCompressed(_file, mem, _pos, num);
+    _pos = _pos + num;
+  } else {
+    ReadCompressed(_file, mem, start, num);
+    _pos = start + num;
+  }
+#else
+#ifdef HAS_ZLIB
+  if (start != -1) gzseek(_file, start, SEEK_SET);
+  gzread(_file, mem, num);
+#else
+  if (start != -1) fseek(_file, start, SEEK_SET);
+  fread(mem, num, 1, _file);
+#endif
+#endif
+}
+
+void irtkCifstream::ReadAsChar(char *data, long length, long offset)
+{
+  // Read data (possibly compressed)
+  this->Read((char *)data, offset, length * sizeof(char));
+}
+
+void irtkCifstream::ReadAsUChar(unsigned char *data, long length, long offset)
+{
+  // Read data (possibly compressed)
+  this->Read((char *)data, offset, length * sizeof(unsigned char));
+}
+
+void irtkCifstream::ReadAsShort(short *data, long length, long offset)
+{
+  // Read data (possibly compressed)
+  this->Read((char *)data, offset, length * sizeof(short));
+
+  // Swap data
+  if (_swapped == true) swap16((char *)data, (char *)data, length);
+}
+
+void irtkCifstream::ReadAsUShort(unsigned short *data, long length, long offset)
+{
+  // Read data (possibly compressed)
+  this->Read((char *)data, offset,
+             length * sizeof(unsigned short));
+
+  // Swap data
+  if (_swapped == true) swap16((char *)data, (char *)data, length);
+}
+
+void irtkCifstream::ReadAsInt(int *data, long length, long offset)
+{
+  // Read data (possibly compressed)
+  this->Read((char *)data, offset, length * sizeof(int));
+
+  // Swap data
+  if (_swapped == true) swap32((char *)data, (char *)data, length);
+}
+
+void irtkCifstream::ReadAsUInt(unsigned int *data, long length, long offset)
+{
+  // Read data (possibly compressed)
+  this->Read((char *)data, offset,
+             length * sizeof(unsigned int));
+
+  // Swap data
+  if (_swapped == true) swap32((char *)data, (char *)data, length);
+}
+
+void irtkCifstream::ReadAsFloat(float *data, long length, long offset)
+{
+  // Read data (possibly compressed)
+  this->Read((char *)data, offset, length * sizeof(float));
+
+  // Swap data
+  if (_swapped == true) swap32((char *)data, (char *)data, length);
+}
+
+void irtkCifstream::ReadAsDouble(double *data, long length, long offset)
+{
+  // Read data (possibly compressed)
+  this->Read((char *)data, offset, length * sizeof(double));
+
+  // Swap data
+  if (_swapped == true) swap64((char *)data, (char *)data, length);
+}
+
+void irtkCifstream::ReadAsString(char *data, long length, long offset)
+{
+  // Read string
+#ifdef HAS_ZLIB
+  if (offset != -1) gzseek(_file, offset, SEEK_SET);
+  gzgets(_file, data, length);
+#else
+  if (offset!= -1) fseek(_file, offset, SEEK_SET);
+  fgets(data, length, _file);
+#endif
+
+  // Check for UNIX end-of-line char
+  if ((strlen(data) > 0) && (data[strlen(data)-1] = '\n')) {
+    data[strlen(data)-1] = '\0';
+    return;
+  }
+  // Check for MAC end-of-line char
+  if ((strlen(data) > 0) && (data[strlen(data)-1] = '\r')) {
+    data[strlen(data)-1] = '\0';
+    return;
+  }
+  // Check for Windows end-of-line char
+  if ((strlen(data) > 1) && (data[strlen(data)-2] = '\r') && (data[strlen(data)-1] = '\n')) {
+    data[strlen(data)-2] = '\0';
+    return;
+  }
+}
+
