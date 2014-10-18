@@ -87,7 +87,7 @@ public:
 
 #include <irtkPointRigidRegistration.h>
 #include <irtkPointAffineRegistration.h>
-#include <irtkPointFreeFormRegistration.h>
+//#include <irtkPointFreeFormRegistration.h>
 #include <irtkWeightedPointRigidRegistration.h>
 
 #endif

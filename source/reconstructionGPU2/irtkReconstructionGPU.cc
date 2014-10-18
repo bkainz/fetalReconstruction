@@ -65,8 +65,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <math.h>
 #include <stdlib.h>
 
-#include <irtkImageFreeFormRegistrationWithPadding.h>
-
 #include <boost/filesystem.hpp>
 using namespace boost::filesystem;
 

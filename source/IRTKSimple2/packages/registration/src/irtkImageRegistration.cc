@@ -316,6 +316,7 @@ void irtkImageRegistration::Initialize(int level)
   case LC:
     _metric = new irtkLabelConsistencySimilarityMetric;
     break;
+#if 0
   case K:
     // Rescale images by an integer factor if necessary
     target_nbins = irtkCalculateNumberOfBins(_target, _NumberOfBins,
@@ -324,6 +325,7 @@ void irtkImageRegistration::Initialize(int level)
                    source_min, source_max);
     _metric = new irtkKappaSimilarityMetric(target_nbins, source_nbins);
     break;
+#endif
   case ML:
     // Rescale images by an integer factor if necessary
 /*    _metric = new irtkMLSimilarityMetric(classification);

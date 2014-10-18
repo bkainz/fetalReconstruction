@@ -231,17 +231,9 @@ inline void irtkImageRegistration::Debug(string message)
 #include <irtkImageRigidRegistration.h>
 #include <irtkImageRigidRegistrationWithPadding.h>
 #include <irtkImageAffineRegistration.h>
-#include <irtkImageFreeFormRegistration.h>
-#include <irtkImageFluidRegistration.h>
-#include <irtkImageEigenFreeFormRegistration.h>
 
 #include <irtkImageRigidRegistration2D.h>
 #include <irtkImageAffineRegistration2D.h>
-#include <irtkImageFreeFormRegistration2D.h>
-#include <irtkImageFluidRegistration2D.h>
-#include <irtkImageEigenFreeFormRegistration2D.h>
 
-#include <irtkMultipleImageRegistration.h>
-#include <irtkMultipleImageFreeFormRegistration.h>
 
 #endif

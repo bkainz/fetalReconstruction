@@ -109,10 +109,10 @@ inline irtkSimilarityMetric *irtkSimilarityMetric::New(irtkSimilarityMetric *met
     }
   }
   {
-    irtkKappaSimilarityMetric *m = dynamic_cast<irtkKappaSimilarityMetric *>(metric);
+/*    irtkKappaSimilarityMetric *m = dynamic_cast<irtkKappaSimilarityMetric *>(metric);
     if (m != NULL) {
       return new irtkKappaSimilarityMetric(m->NumberOfBinsX(), m->NumberOfBinsY());
-    }
+    }*/
   }
   {
     irtkLabelConsistencySimilarityMetric *m = dynamic_cast<irtkLabelConsistencySimilarityMetric *>(metric);

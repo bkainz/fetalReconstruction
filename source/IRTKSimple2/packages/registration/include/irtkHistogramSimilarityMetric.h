@@ -159,7 +159,7 @@ inline irtkHistogram_2D<double> * irtkHistogramSimilarityMetric::GetPointerToHis
 #include <irtkJointEntropySimilarityMetric.h>
 #include <irtkCorrelationRatioXYSimilarityMetric.h>
 #include <irtkCorrelationRatioYXSimilarityMetric.h>
-#include <irtkKappaSimilarityMetric.h>
+//#include <irtkKappaSimilarityMetric.h>
 #include <irtkLabelConsistencySimilarityMetric.h>
 
 #endif
