@@ -16,7 +16,7 @@
 
 #include <irtkImage.h>
 #include <irtkGeometry.h>
-#include <irtkBSplineFunction.h>
+//#include <irtkBSplineFunction.h>
 
 /// Definition of available states for individual degrees of freedom
 typedef enum { _Active, _Passive, _Unknown } _Status;
@@ -26,17 +26,17 @@ typedef enum { _Active, _Passive, _Unknown } _Status;
 #define IRTKTRANSFORMATION_HOMOGENEOUS      1
 #define IRTKTRANSFORMATION_RIGID            2
 #define IRTKTRANSFORMATION_AFFINE           3
-#define IRTKTRANSFORMATION_BSPLINE_FFD      4
-#define IRTKTRANSFORMATION_LINEAR_FFD       5
-#define IRTKTRANSFORMATION_EIGEN_FFD        6
-#define IRTKTRANSFORMATION_MFFD             7
-#define IRTKTRANSFORMATION_FLUID            8
-#define IRTKTRANSFORMATION_LATTICE_FFD      9
-#define IRTKTRANSFORMATION_MULTI_FRAME_LATTICE_FFD 10
+//#define IRTKTRANSFORMATION_BSPLINE_FFD      4
+//#define IRTKTRANSFORMATION_LINEAR_FFD       5
+//#define IRTKTRANSFORMATION_EIGEN_FFD        6
+//#define IRTKTRANSFORMATION_MFFD             7
+//#define IRTKTRANSFORMATION_FLUID            8
+//#define IRTKTRANSFORMATION_LATTICE_FFD      9
+//#define IRTKTRANSFORMATION_MULTI_FRAME_LATTICE_FFD 10
 #define IRTKTRANSFORMATION_QUATERNION       11
-#define IRTKTRANSFORMATION_BSPLINE_FFD_EXT1 12
-#define IRTKTRANSFORMATION_LINEAR_FFD_EXT1  13
-#define IRTKTRANSFORMATION_BSPLINE_FFD_4D   14
+//#define IRTKTRANSFORMATION_BSPLINE_FFD_EXT1 12
+//#define IRTKTRANSFORMATION_LINEAR_FFD_EXT1  13
+//#define IRTKTRANSFORMATION_BSPLINE_FFD_4D   14
 #define IRTKTRANSFORMATION_PERIODIC         20
 #define IRTKTRANSFORMATION_HOMO_TEMPORAL    30
 #define IRTKTRANSFORMATION_RIGID_TEMPORAL   31
@@ -346,22 +346,6 @@ inline ostream& irtkTransformation::Export(ostream &)
 #include <irtkRigidTransformation.h>
 #include <irtkAffineTransformation.h>
 
-// Free-form transformations
-#include <irtkFreeFormTransformation.h>
-#include <irtkFreeFormTransformation3D.h>
-#include <irtkFreeFormTransformation4D.h>
-
-#include <irtkLinearFreeFormTransformation.h>
-#include <irtkBSplineFreeFormTransformation3D.h>
-#include <irtkEigenFreeFormTransformation.h>
-
-#include <irtkBSplineFreeFormTransformation4D.h>
-#include <irtkBSplineFreeFormTransformationPeriodic.h>
-
-// Composite transformations
-#include <irtkMultiLevelFreeFormTransformation.h>
-#include <irtkFluidFreeFormTransformation.h>
-
 // Image transformation filters
 #include <irtkImageTransformation.h>
 #include <irtkImageTransformation2.h>
@@ -371,9 +355,6 @@ inline ostream& irtkTransformation::Export(ostream &)
 #include <irtkTemporalHomogeneousTransformation.h>
 #include <irtkTemporalRigidTransformation.h>
 #include <irtkTemporalAffineTransformation.h>
-
-// Typedefs for backwards compatibility
-typedef class irtkBSplineFreeFormTransformation3D irtkBSplineFreeFormTransformation;
 
 
 #endif

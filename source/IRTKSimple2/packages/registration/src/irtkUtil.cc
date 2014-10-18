@@ -154,6 +154,7 @@ void irtkPadding(irtkGreyImage &image, irtkGreyPixel padding)
     }
 }
 
+#if 0
 void irtkPadding(irtkRealImage &image, irtkRealPixel padding, irtkFreeFormTransformation3D *ffd)
 {
     int i, j, k, x, y, z, x1, y1, z1, x2, y2, z2, ok, index;
@@ -188,6 +189,7 @@ void irtkPadding(irtkRealImage &image, irtkRealPixel padding, irtkFreeFormTransf
         }
     }
 }
+#endif
 
 int irtkGetBinIndex(irtkRealPixel pix, int min, int max, int nbins) {
   int val;
@@ -200,6 +202,7 @@ int irtkGetBinIndex(irtkRealPixel pix, int min, int max, int nbins) {
   return val;
 }
 
+#if 0
 void irtkPadding(irtkGreyImage &image, irtkGreyPixel padding, irtkFreeFormTransformation3D *ffd)
 {
     int i, j, k, x, y, z, x1, y1, z1, x2, y2, z2, ok, index;
@@ -399,7 +402,7 @@ void irtkPadding(irtkGreyImage *image, irtkGreyPixel padding, irtkBSplineFreeFor
     }
     cout << "Number of CP padded: " << number << " out of " << ffd->NumberOfDOFs() << endl;
 }
-
+#endif
 double GuessResolution(double xsize, double ysize, double zsize)
 {
     if ((xsize >= ysize) && (xsize >= zsize)) return xsize;

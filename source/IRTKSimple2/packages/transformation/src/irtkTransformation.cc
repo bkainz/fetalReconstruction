@@ -74,7 +74,7 @@ irtkTransformation *irtkTransformation::New(char *name)
       transformation->Import(name);
       return transformation;
     }
-
+#if 0
     if (irtkBSplineFreeFormTransformation::CheckHeader(name) == true) {
       transformation = new irtkBSplineFreeFormTransformation;
       transformation->Import(name);
@@ -98,7 +98,7 @@ irtkTransformation *irtkTransformation::New(char *name)
       transformation->Import(name);
       return transformation;
     }
-
+#endif
 #ifdef HAS_SUBDIVISION
     if (irtkLatticeFreeFormTransformation::CheckHeader(name) == true) {
       transformation = new irtkLatticeFreeFormTransformation;
@@ -132,6 +132,7 @@ irtkTransformation *irtkTransformation::New(char *name)
     transformation = new irtkAffineTransformation;
     transformation->Read(name);
     return transformation;
+#if 0
   case IRTKTRANSFORMATION_BSPLINE_FFD:
   case IRTKTRANSFORMATION_BSPLINE_FFD_EXT1:
     transformation = new irtkBSplineFreeFormTransformation;
@@ -162,6 +163,7 @@ irtkTransformation *irtkTransformation::New(char *name)
 	transformation = new irtkBSplineFreeFormTransformationPeriodic;
 	transformation->Read(name);
 	return transformation;
+#endif
   case IRTKTRANSFORMATION_HOMO_TEMPORAL:
 	transformation = new irtkTemporalHomogeneousTransformation;
 	transformation->Read(name);
