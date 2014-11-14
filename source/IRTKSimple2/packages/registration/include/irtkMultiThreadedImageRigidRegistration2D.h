@@ -12,7 +12,7 @@
 
 #ifdef HAS_TBB
 
-extern tbb::deprecated::concurrent_queue<irtkSimilarityMetric *> sim_queue;
+extern tbb::concurrent_bounded_queue<irtkSimilarityMetric *> sim_queue;
 
 class irtkMultiThreadedImageRigidRegistrationEvaluate2D
 {
@@ -39,8 +39,9 @@ public:
     // Initialize filter
     _filter = r._filter;
 
-    // Copy similarity metric
-    if (sim_queue.pop_if_present(_metric) == false) {
+    // Copy similarity metric try_pop
+   // if (sim_queue.pop_if_present(_metric) == false) {
+    if (sim_queue.try_pop(_metric) == false) {
       _metric = irtkSimilarityMetric::New(_filter->_metric);
     }
 
