@@ -300,8 +300,9 @@ int main(int argc, char **argv)
         {
           try
           {
-            cudaSetDevice(i);
-            devicesToUse.push_back(i);
+            cudaError_t status = cudaSetDevice(i);
+            if (status == cudaSuccess)
+              devicesToUse.push_back(i);
           }
           catch (int e)
           {
