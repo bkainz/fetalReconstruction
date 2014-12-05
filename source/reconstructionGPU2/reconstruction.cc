@@ -292,12 +292,21 @@ int main(int argc, char **argv)
     }
     if (devicesToUse.empty())
     {
+
       for (int i = 0; i < nDevices; i++) {
         cudaDeviceProp prop;
         cudaGetDeviceProperties(&prop, i);
         if (prop.major >= 3)
         {
-          devicesToUse.push_back(i);
+          try
+          {
+            cudaSetDevice(i);
+            devicesToUse.push_back(i);
+          }
+          catch (int e)
+          {
+            cout << "device not available. " << e << '\n';
+          }          
         }
       }
     }
