@@ -304,9 +304,9 @@ int main(int argc, char **argv)
             if (status == cudaSuccess)
               devicesToUse.push_back(i);
           }
-          catch (int e)
+          catch(...)
           {
-            cout << "device not available. " << e << '\n';
+            cout << "skipping device " << i << '\n';
           }          
         }
       }
