@@ -294,12 +294,22 @@ int main(int argc, char **argv)
     }
     if (devicesToUse.empty())
     {
+
       for (int i = 0; i < nDevices; i++) {
         cudaDeviceProp prop;
         cudaGetDeviceProperties(&prop, i);
         if (prop.major >= 3)
         {
-          devicesToUse.push_back(i);
+          try
+          {
+            cudaError_t status = cudaSetDevice(i);
+            if (status == cudaSuccess)
+              devicesToUse.push_back(i);
+          }
+          catch(...)
+          {
+            cout << "skipping device " << i << '\n';
+          }          
         }
       }
     }
