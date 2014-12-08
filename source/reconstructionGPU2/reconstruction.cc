@@ -154,6 +154,7 @@ int main(int argc, char **argv)
   unsigned int num_input_stacks_tuner = 0;
   string referenceVolumeName;
   unsigned int T1PackageSize = 0;
+  bool patchBased = false;
 
   try
   {
@@ -195,7 +196,8 @@ int main(int argc, char **argv)
       ("useCPUReg", po::bool_switch(&useCPUReg)->default_value(true), "use CPU for more flexible CPU registration; performs superresolution and robust statistics on GPU. [default, best result]")
       ("useGPUReg", po::bool_switch(&useGPUReg)->default_value(false), "use faster but less accurate and flexible GPU registration; performs superresolution and robust statistics on GPU.")
       ("useAutoTemplate", po::bool_switch(&useAutoTemplate)->default_value(false), "select 3D registration template stack automatically with matrix rank method.")
-      ("disableBiasCorrection", po::bool_switch(&disableBiasCorr)->default_value(false), "disable bias field correction for cases with little or no bias field inhomogenities (makes it faster but less reliable for stron intensity bias)");
+      ("disableBiasCorrection", po::bool_switch(&disableBiasCorr)->default_value(false), "disable bias field correction for cases with little or no bias field inhomogenities (makes it faster but less reliable for stron intensity bias)")
+      ("patchBased", po::bool_switch(&patchBased)->default_value(false), "activate experimentl patch-based reconstruction.");
     po::variables_map vm;
 
     try
@@ -312,6 +314,7 @@ int main(int argc, char **argv)
   // !useCPUReg = no multithreaded GPU, only multi-GPU
   irtkReconstruction reconstruction(devicesToUse, useCPUReg); // to emulate error for multi-threaded GPU
 
+  reconstruction.setPatchBased(patchBased, useCPU);
   reconstruction.Set_debugGPU(debug_gpu);
 
   reconstruction.InvertStackTransformations(stack_transformations);
@@ -378,8 +381,18 @@ int main(int argc, char **argv)
   //If no mask was given  try to create mask from the template image in case it was padded
   if ((mask == NULL) && (sfolder.empty()))
   {
+    //TODO calculate overlap area. Make mask from that
     mask = new irtkRealImage(stacks[templateNumber]);
-    *mask = reconstruction.CreateMask(*mask);
+    if (patchBased)
+    {
+      *mask = reconstruction.CreateMaskFromOverlap(stacks);
+    }
+    else
+    {
+      *mask = reconstruction.CreateMask(*mask);
+    }
+
+    mask->Write("generatedMask.nii");
   }
 
   //copy to tmp stacks for template determination
@@ -615,11 +628,17 @@ int main(int argc, char **argv)
   average = reconstruction.CreateAverage(stacks, stack_transformations);
   if (debug)
     average.Write("average2.nii.gz");
-  //exit(1);
-
+ 
   //Create slices and slice-dependent transformations
   //resolution = reconstruction.CreateTemplate(stacks[templateNumber],resolution);
-  reconstruction.CreateSlicesAndTransformations(stacks, stack_transformations, thickness);
+  if(patchBased)
+  {
+    reconstruction.CreateSlicesAndTransformationsPatchBased(32,16,stacks, stack_transformations, thickness);
+  }
+  else
+  {
+    reconstruction.CreateSlicesAndTransformations(stacks, stack_transformations, thickness);
+  }
 
   if (!sfolder.empty())
   {
@@ -921,7 +940,7 @@ int main(int argc, char **argv)
       {
         reconstruction.Superresolution(i + 1);
 
-#if 1
+#if 0
         reconstructed = reconstruction.GetReconstructed();
         sprintf(buffer, "superCPU%i.nii", i);
         reconstructed.Write(buffer);
@@ -1010,6 +1029,24 @@ int main(int argc, char **argv)
 
     }
     stats.sample("MaskVolume");
+
+
+    if (patchBased)
+    {
+      if (!useCPU)
+      {
+      irtkGenericImage<float> volweights = reconstruction.getVolWeights();
+      sprintf(buffer, "volWeights%i_GPU.nii", iter);
+      volweights.Write(buffer);
+      irtkGenericImage<float> weights = reconstruction.getWeights();
+      sprintf(buffer, "weights%i_GPU.nii", iter);
+      weights.Write(buffer);
+      }
+      else
+      {
+        reconstruction.SaveWeights();
+      }
+    }
 
     //Save reconstructed image
     if (useCPU)
