@@ -154,6 +154,7 @@ int main(int argc, char **argv)
   unsigned int num_input_stacks_tuner = 0;
   string referenceVolumeName;
   unsigned int T1PackageSize = 0;
+  unsigned int numDevicesToUse = UINT_MAX;
 
   try
   {
@@ -191,6 +192,7 @@ int main(int argc, char **argv)
       ("sfolder", po::value< string >(&sfolder), "[folder] Use existing registered slices and replace loaded ones (have to be equally many as loaded from stacks).")
       ("referenceVolume", po::value<string>(&referenceVolumeName), "Name for an optional reference volume. Will be used as inital reconstruction.")
       ("T1PackageSize", po::value<unsigned int>(&T1PackageSize), "is a test if you can register T1 to T2 using NMI and only one iteration")
+      ("numDevicesToUse", po::value<unsigned int>(&numDevicesToUse), "sets how many GPU devices to use in case of automatic device selection. Default is as many as available.")
       ("useCPU", po::bool_switch(&useCPU)->default_value(false), "use CPU for reconstruction and registration; performs superresolution and robust statistics on CPU. Default is using the GPU")
       ("useCPUReg", po::bool_switch(&useCPUReg)->default_value(true), "use CPU for more flexible CPU registration; performs superresolution and robust statistics on GPU. [default, best result]")
       ("useGPUReg", po::bool_switch(&useGPUReg)->default_value(false), "use faster but less accurate and flexible GPU registration; performs superresolution and robust statistics on GPU.")
@@ -302,12 +304,17 @@ int main(int argc, char **argv)
           {
             cudaError_t status = cudaSetDevice(i);
             if (status == cudaSuccess)
-              devicesToUse.push_back(i);
+            {
+              if (devicesToUse.size() < numDevicesToUse)
+              {
+                devicesToUse.push_back(i);
+              }
+            }
           }
-          catch(...)
+          catch (...)
           {
             cout << "skipping device " << i << '\n';
-          }          
+          }
         }
       }
     }
