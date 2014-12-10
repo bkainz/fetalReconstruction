@@ -87,4 +87,8 @@ INCLUDE_DIRECTORIES(${TBB_INSTALL_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/reconstructionGPU2/)
 
+## patch based preparations 
+#add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/patch-based/)
+
+
 
