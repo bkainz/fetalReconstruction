@@ -143,10 +143,18 @@ __device__ float inline calcPSF(float3 sPos, float3 dim)
   return exp(-sPos.x * sPos.x / (2.0f * sigmax * sigmax) - sPos.y * sPos.y / (2.0f * sigmay * sigmay)
     - sPos.z * sPos.z / (2.0f * sigmaz * sigmaz));
 #else
-  float R = sqrt(sPos.x * sPos.x / (2 * sigmax * sigmax) + sPos.y * sPos.y / (2 * sigmay * sigmay)
-    + sPos.z * sPos.z / (2 * sigmaz * sigmaz));
-  return sin(R)/(R) * exp(-sPos.x * sPos.x / (2 * sigmax * sigmax) - sPos.y * sPos.y / (2 * sigmay * sigmay)
-    - sPos.z * sPos.z / (2 * sigmaz * sigmaz));
+  if (sPos.z == 0) // in plane sinc
+  {
+    sPos.x = sPos.x * sigmax;
+    sPos.y = sPos.y * sigmay;
+    float R = sqrt(sPos.x*sPos.x + sPos.y*sPos.y);
+    return sin(R) / (R);
+  }
+  else //though plane gauss
+  {
+    return exp(-sPos.x * sPos.x / (2.0f * sigmax * sigmax) - sPos.y * sPos.y / (2.0f * sigmay * sigmay)
+      - sPos.z * sPos.z / (2.0f * sigmaz * sigmaz));
+  }
 #endif
 
 }
