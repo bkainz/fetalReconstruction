@@ -84,8 +84,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 //usually the kernel runtime watchdog is activated in windows -- workaround:
 #if WIN32 
-#define MAX_SLICES_PER_RUN_GAUSS 5
-#define MAX_SLICES_PER_RUN 10
+#define MAX_SLICES_PER_RUN_GAUSS 1
+#define MAX_SLICES_PER_RUN 1
 #else
 #define MAX_SLICES_PER_RUN_GAUSS 1000
 #define MAX_SLICES_PER_RUN 1000
@@ -94,9 +94,11 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define MAX_GPU_COUNT 32 
 
 //use a sinc in-plane gauss through plane PSF 
-//(real MRI, not much difference to Gaussian PSF)
-#define USE_SINC_PSF 0
+#define USE_SINC_PSF 1
 
+#define PSF_EPSILON 0.01
+#define USE_INFINITE_PSF_SUPPORT 1
+#define MAX_PSF_SUPPORT 16
 //configuration section end
 /////////////////////////////////////////////////
 
@@ -110,9 +112,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define CHECK_ERROR(function)
 #endif
 
-inline int divup(int a, int b) { return (a + b - 1)/b; }
-inline dim3 divup( uint2 a, dim3 b) { return dim3(divup(a.x, b.x), divup(a.y, b.y)); }
-inline dim3 divup( dim3 a, dim3 b) { return dim3(divup(a.x, b.x), divup(a.y, b.y), divup(a.z, b.z)); }
+inline int divup(int a, int b) { return (a + b - 1) / b; }
+inline dim3 divup(uint2 a, dim3 b) { return dim3(divup(a.x, b.x), divup(a.y, b.y)); }
+inline dim3 divup(dim3 a, dim3 b) { return dim3(divup(a.x, b.x), divup(a.y, b.y), divup(a.z, b.z)); }
 
 struct Reconstruction {
 
@@ -154,8 +156,8 @@ struct Reconstruction {
   std::vector< Volume<float> > dev_confidence_map_;
   std::vector< Volume<float> > dev_volume_weights_;
 
-  std::vector< Volume<float> > dev_reconRegUncertainty_;
-  std::vector< Volume<float> > dev_scaleSamplingUncertainty_;
+  //std::vector< Volume<float> > dev_reconRegUncertainty_;
+  //std::vector< Volume<float> > dev_scaleSamplingUncertainty_;
 
   std::vector<float*> dev_d_scales;
   std::vector<float*> dev_d_slice_weights;
@@ -212,6 +214,8 @@ struct Reconstruction {
   Volume<float> v_wb;
   Volume<float> v_buffer;
 
+  void combineWeights(float* weights);
+
   void debugWeights(float* weights);
   void debugBias(float* bias);
   void debugNormalizeBias(float* nbias);
@@ -226,35 +230,35 @@ struct Reconstruction {
   void getSlicesVol_debug(float* h_imdata);
   void getRegSlicesVol_debug(float* h_imdata);
   void syncGPUrecon(float* reconstructed);
-  void getWeights(float* weights);
+  void getVolWeights(float* weights);
   void debugRegSlicesVolume(float* regSlicesHost);
 
   //init/update functions
-  void updateStackSizes(std::vector<uint3> stack_sizes_){stack_sizes = stack_sizes_;};
+  void updateStackSizes(std::vector<uint3> stack_sizes_){ stack_sizes = stack_sizes_; };
   void InitializeEMValues();
   void InitializeEMValuesOnX(int dev);
   void syncCPU(float* reconstructed);
   void initStorageVolumes(uint3 size, float3 dim);
   void initStorageVolumesOnX(uint3 size, float3 dim, int start, int end, int dev);
-  void FillSlices(float* sdata,  std::vector<int> sizesX, std::vector<int> sizesY);
-  void FillSlicesOnX(float* sdata,  std::vector<int>& sizesX, std::vector<int>& sizesY, float* d_ldata, float * ldata, int dev, bool alloc);
+  void FillSlices(float* sdata, std::vector<int> sizesX, std::vector<int> sizesY);
+  void FillSlicesOnX(float* sdata, std::vector<int>& sizesX, std::vector<int>& sizesY, float* d_ldata, float * ldata, int dev, bool alloc);
   void generatePSFVolume(float* CPUPSF, uint3 PSFsize_, float3 sliceVoxelDim, float3 PSFdim, Matrix4 PSFI2W, Matrix4 PSFW2I, float _quality_factor);
   void generatePSFVolumeOnX(float* CPUPSF, uint3 PSFsize_, float3 sliceVoxelDim, float3 PSFdim, Matrix4 PSFI2W, Matrix4 PSFW2I, float _quality_factor, int dev);
   void setSliceDims(std::vector<float3> slice_dims, float _quality_factor);
   void setSliceDimsOnX(std::vector<float3>& slice_dims, std::vector<int>& sliceDim, bool allocate, int dev);
-  void SetSliceMatrices(std::vector<Matrix4> matSliceTransforms, std::vector<Matrix4> matInvSliceTransforms, 
-                        std::vector<Matrix4>& matsI2Winit, std::vector<Matrix4>& matsW2Iinit, std::vector<Matrix4>& matsI2W, std::vector<Matrix4>& matsW2I,
-                        Matrix4 reconI2W, Matrix4 reconW2I);
-  void SetSliceMatricesOnX(std::vector<Matrix4> matSliceTransforms, std::vector<Matrix4> matInvSliceTransforms, 
-                                      std::vector<Matrix4>& matsI2Winit, std::vector<Matrix4>& matsW2Iinit, std::vector<Matrix4>& matsI2W, 
-                                      std::vector<Matrix4>& matsW2I, Matrix4 reconI2W, Matrix4 reconW2I, int dev, bool alloc);
+  void SetSliceMatrices(std::vector<Matrix4> matSliceTransforms, std::vector<Matrix4> matInvSliceTransforms,
+    std::vector<Matrix4>& matsI2Winit, std::vector<Matrix4>& matsW2Iinit, std::vector<Matrix4>& matsI2W, std::vector<Matrix4>& matsW2I,
+    Matrix4 reconI2W, Matrix4 reconW2I);
+  void SetSliceMatricesOnX(std::vector<Matrix4> matSliceTransforms, std::vector<Matrix4> matInvSliceTransforms,
+    std::vector<Matrix4>& matsI2Winit, std::vector<Matrix4>& matsW2Iinit, std::vector<Matrix4>& matsI2W,
+    std::vector<Matrix4>& matsW2I, Matrix4 reconI2W, Matrix4 reconW2I, int dev, bool alloc);
   void UpdateSliceWeights(std::vector<float> slices_weights);
   void UpdateSliceWeightsOnX(std::vector<float>& slices_weights, int dev);
   void InitReconstructionVolume(uint3 s, float3 dim, float* data, float sigma_bias); // allocates the volume and image data on the device
   void InitReconstructionVolumeOnX(uint3 s, float3 dim, float* data, float sigma_bias, int dev);
   void InitSlices(int num_slices);
   void UpdateReconstructed(const uint3 vsize, float* data); //temporary for CPU GPU sync
-  void UpdateReconstructedOnX(const uint3 vsize, float* data, int dev); 
+  void UpdateReconstructedOnX(const uint3 vsize, float* data, int dev);
   void SyncConfidenceMapAddon(float* cmdata, float* addondata);
   void UpdateScaleVector(std::vector<float> scales, std::vector<float> slices_weights);//{h_scales = scales; /*thrust::copy(scales.begin(), scales.end(), scale_.begin());*/};
   void UpdateScaleVectorOnX(std::vector<float>& scales, std::vector<float>& slices_weights, int dev, bool alloc);
@@ -266,10 +270,10 @@ struct Reconstruction {
 
   //calculation functions
   void NormaliseBias(int iter, float sigma_bias);
-  void NormaliseBiasOnX(int iter, Volume<float>& dev_bias_accbuf_, float sigma_bias, int dev);
+  void NormaliseBiasOnX(int iter, Volume<float>& dev_bias_accbuf_, Volume<float>& dev_volume_weights_accbuf_, float sigma_bias, int dev);
   void EStep(float _m, float _sigma, float _mix, std::vector<float>& slice_potential);
-  void EStepOnX(float _m, float _sigma, float _mix, std::vector<float>& slice_potential, int dev);
-  void MStep(int iter,  float _step, float& _sigma, float& _mix, float& _m);
+  void EStepOnX(float _m, float _sigma, float _mix, std::vector<float>& slice_potential, float* d_lweigthsdata, int dev);
+  void MStep(int iter, float _step, float& _sigma, float& _mix, float& _m);
   void MStepOnX(thrust::tuple<float, float, float, float, float> &results, int dev);
   void SimulateSlices(std::vector<bool>& slice_inside);
   void SimulateSlicesOnX(std::vector<bool>::iterator slice_inside, int dev);
@@ -277,8 +281,8 @@ struct Reconstruction {
   void InitializeRobustStatistics(float& _sigma);
   void CorrectBias(float sigma_bias, bool _global_bias_correction);
   void CorrectBiasOnX(float sigma_bias, bool _global_bias_correction, float* d_lbiasdata, int dev);
-  void Superresolution(int iter, std::vector<float> _slice_weight, bool _adaptive, float alpha, 
-    float _min_intensity, float _max_intensity, float delta, float lambda,  bool _global_bias_correction, float sigma_bias,
+  void Superresolution(int iter, std::vector<float> _slice_weight, bool _adaptive, float alpha,
+    float _min_intensity, float _max_intensity, float delta, float lambda, bool _global_bias_correction, float sigma_bias,
     float _low_intensity_cutoff);
   void SuperresolutionOnX1(int N, Volume<float>& dev_addon_accbuf_, Volume<float>& dev_cmap_accbuf_, Volume<float>& original, int dev);
 
@@ -289,7 +293,7 @@ struct Reconstruction {
   void GaussianReconstruction(std::vector<int>& voxel_num);
   void GaussianReconstructionOnX1(int& voxel_num, Volume<float>& dev_reconstructed_accbuf_, int dev);
   void GaussianReconstructionOnX2(int& voxel_num, int dev);
-  typedef enum {TX, TY, TZ, RX, RY, RZ, SX, SY, SZ, SXY, SYZ, SXZ, SYX, SZY, SZX}
+  typedef enum { TX, TY, TZ, RX, RY, RZ, SX, SY, SZ, SXY, SYZ, SXZ, SYX, SZY, SZX }
   irtkHomogeneousTransformationParameterIndex;
   void Matrix2Parameters(Matrix4 m, float* params);
   Matrix4 Parameters2Matrix(float *params);

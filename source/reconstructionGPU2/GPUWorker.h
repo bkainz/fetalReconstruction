@@ -176,7 +176,8 @@ public:
   // UpdateReconstructed // step = 10
   uint3 _vsize;
   // CorrectBias // step 11
-  float _global_bias_correction; float * _d_lbiasdata;
+  float _global_bias_correction; 
+  float * _d_lbiasdata;
   // SuperresolutionOn // step 12
   int _N;
   Volume<float> *_dev_addon_accbuf_, *_dev_cmap_accbuf_, *_original;
@@ -188,11 +189,13 @@ public:
   // NormaliseBiasOnX // step 16
   int _iter;
   Volume<float>* _dev_bias_accbuf_;
+  Volume<float>* dev_volume_weights_accbuf_;
   // SimulateSlicesOnX // step 17
   std::vector<bool>::iterator _slice_inside;
   // EStep // step 18
   float _m, _sigma, _mix;
   std::vector<float>* _slice_potential;
+  float * _d_lweightsdata;
   // MStepOnX // step 19
   thrust::tuple<float, float, float, float, float> *_results;
   // CalculateScaleVector // step 20
@@ -281,7 +284,9 @@ public:
   void prepareCorrectBias(float sigma_bias, bool global_bias_correction, float* d_lbiasdata)
   {
     step = 11;
-    _sigma_bias = sigma_bias; _global_bias_correction = global_bias_correction; _d_lbiasdata = d_lbiasdata;
+    _sigma_bias = sigma_bias; 
+    _global_bias_correction = global_bias_correction; 
+    _d_lbiasdata = d_lbiasdata;
   }
   void prepareSuperresolution(int N, Volume<float> &dev_addon_accbuf_, Volume<float> &dev_cmap_accbuf_, Volume<float> &original)
   {
@@ -318,13 +323,15 @@ public:
     _slice_inside = slice_inside;
   }
 
-  void prepareEStep(float m, float sigma, float mix, std::vector<float>& slice_potential)
+  void prepareEStep(float m, float sigma, float mix, std::vector<float>& slice_potential, float* d_lweigthsdata)
   {
     step = 18;
     _m = _m;
     _sigma = sigma;
     _mix = mix;
     _slice_potential = &slice_potential;
+    _d_lweightsdata = d_lweigthsdata;
+
   }
 
   void prepareMStep(thrust::tuple<float, float, float, float, float> &results)

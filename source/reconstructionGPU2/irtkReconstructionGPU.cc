@@ -2486,7 +2486,7 @@ void irtkReconstruction::GaussianReconstructionGPU()
     irtkGenericImage<float> bweights;
     bweights.Initialize(_reconstructed.GetImageAttributes());
     //irtkRealImage bweights(reconstructionGPU->reconstructed_volWeigths.size.x, reconstructionGPU->reconstructed_volWeigths.size.y, reconstructionGPU->reconstructed_volWeigths.size.z);
-    reconstructionGPU->getWeights(bweights.GetPointerToVoxels());
+    reconstructionGPU->combineWeights(bweights.GetPointerToVoxels());
     bweights.Write("volume_weightsGPU.nii");
 
     irtkGenericImage<float> weightnorm(reconstructionGPU->v_PSF_sums_.size.x, reconstructionGPU->v_PSF_sums_.size.y, reconstructionGPU->v_PSF_sums_.size.z);

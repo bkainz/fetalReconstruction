@@ -216,7 +216,7 @@ void GPUWorkerCommunicator::execute()
 
       // NormaliseBiasOnX // step 16
     case 16:
-      reconstruction.NormaliseBiasOnX(_iter, *_dev_bias_accbuf_, _sigma, GPU);
+      reconstruction.NormaliseBiasOnX(_iter, *_dev_bias_accbuf_, *dev_volume_weights_accbuf_, _sigma, GPU);
       break;
 
       // SimulateSlicesOnX // step 17
@@ -226,7 +226,7 @@ void GPUWorkerCommunicator::execute()
 
       // EStep // step 18
     case 18:
-      reconstruction.EStepOnX(_m, _sigma, _mix, *_slice_potential, GPU);
+      reconstruction.EStepOnX(_m, _sigma, _mix, *_slice_potential, _d_lweightsdata, GPU);
       break;
 
       // MStepOnX // step 19
