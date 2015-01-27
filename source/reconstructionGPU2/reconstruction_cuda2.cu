@@ -762,7 +762,7 @@ void Reconstruction::generatePSFVolumeOnX(float* CPUPSF, uint3 PSFsize_, float3 
   checkCudaErrors(cudaMemcpyToSymbol(d_PSFW2I, &(PSFW2I), sizeof(Matrix4)));
   checkCudaErrors(cudaMemcpyToSymbol(d_quality_factor, &(_quality_factor), sizeof(float)));
   checkCudaErrors(cudaMemcpyToSymbol(d_use_SINC, &(_use_SINC), sizeof(bool)));
-  if (_use_SINC)
+  if (_use_SINC && _debugGPU)
   {
     printf("using sinc like PSF.");
   }
