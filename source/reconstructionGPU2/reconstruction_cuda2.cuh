@@ -93,9 +93,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //maximum number of GPUs running in parallel
 #define MAX_GPU_COUNT 32 
 
-//use a sinc in-plane gauss through plane PSF 
-#define USE_SINC_PSF 1
-
 #define PSF_EPSILON 0.01
 #define USE_INFINITE_PSF_SUPPORT 1
 #define MAX_PSF_SUPPORT 16
