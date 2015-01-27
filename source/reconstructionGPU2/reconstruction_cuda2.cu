@@ -69,6 +69,7 @@ __constant__ uint3 d_PSFsize;
 __constant__ Matrix4 d_PSFI2W;
 __constant__ Matrix4 d_PSFW2I;
 __constant__ float d_quality_factor;
+__constant__ float d_use_SINC; //constant flag because of efficency reasons
 
 texture<float, 3, cudaReadModeElementType> psfTex;
 texture<float, 3, cudaReadModeElementType > reconstructedTex_;
@@ -136,22 +137,25 @@ __device__ float inline calcPSF(float3 sPos, float3 dim)
   const float sigmaz = dim.z / 2.3548f;
 
 #if 1
-#if !USE_SINC_PSF
-  const float sigmax = 1.2f * dim.x / 2.3548f;
-  const float sigmay = 1.2f * dim.y / 2.3548f;
 
-  return exp((-sPos.x * sPos.x) / (2.0f * sigmax * sigmax) - (sPos.y * sPos.y) / (2.0f * sigmay * sigmay)
-    - (sPos.z * sPos.z) / (2.0f * sigmaz * sigmaz));
-#else
-  // sinc is already 1.2 FWHM
-  sPos.x = sPos.x * dim.x / 2.3548f;
-  sPos.y = sPos.y * dim.y / 2.3548f;
-  float x = sqrt(sPos.x*sPos.x + sPos.y*sPos.y);
-  float R = 3.14159265359f * x;
-  float si = sin(R) / (R);
-  return  si*si * exp((-sPos.z * sPos.z) / (2.0f * sigmaz * sigmaz)); //Bartlett positive sinc
+  if(d_use_SINC)
+  {
+    // sinc is already 1.2 FWHM
+    sPos.x = sPos.x * dim.x / 2.3548f;
+    sPos.y = sPos.y * dim.y / 2.3548f;
+    float x = sqrt(sPos.x*sPos.x + sPos.y*sPos.y);
+    float R = 3.14159265359f * x;
+    float si = sin(R) / (R);
+    return  si*si * exp((-sPos.z * sPos.z) / (2.0f * sigmaz * sigmaz)); //Bartlett positive sinc
+  }
+  else
+  {
+    const float sigmax = 1.2f * dim.x / 2.3548f;
+    const float sigmay = 1.2f * dim.y / 2.3548f;
 
-#endif
+    return exp((-sPos.x * sPos.x) / (2.0f * sigmax * sigmax) - (sPos.y * sPos.y) / (2.0f * sigmay * sigmay)
+      - (sPos.z * sPos.z) / (2.0f * sigmaz * sigmaz));
+  }
 
 #else
   float val = exp(-sPos.x * sPos.x / (2.0f * sigmax * sigmax) - sPos.y * sPos.y / (2.0f * sigmay * sigmay)
@@ -248,11 +252,13 @@ __global__ void gaussianReconstructionKernel3D_tex(int numSlices, float* __restr
   {
     for (int y = 0; y < dim; y++)
     {
+      float oldPSF = FLT_MAX;
       for (int x = 0; x < dim; x++)
       {
         float3 ofsPos;
         float psfval = getPSFParamsPrecomp(ofsPos, psfxyz, make_int3(x - centre, y - centre, z - centre), combInvTrans, slicePos, sliceDim);
-        if (abs(psfval) < PSF_EPSILON) continue;
+        if (abs(oldPSF - psfval) < PSF_EPSILON) continue;
+        oldPSF = psfval;
 
         uint3 apos = make_uint3(ofsPos.x, ofsPos.y, ofsPos.z);
         if (apos.x < reconstructed.size.x && apos.y < reconstructed.size.y && apos.z < reconstructed.size.z)
@@ -279,11 +285,13 @@ __global__ void gaussianReconstructionKernel3D_tex(int numSlices, float* __restr
   {
     for (float y = 0; y < dim; y++)
     {
+      float oldPSF = FLT_MAX;
       for (float x = 0; x < dim; x++)
       {
         float3 ofsPos;
         float psfval = getPSFParamsPrecomp(ofsPos, psfxyz, make_int3(x - centre, y - centre, z - centre), combInvTrans, slicePos, sliceDim);
-        if (abs(psfval) < PSF_EPSILON) continue;
+        if (abs(oldPSF - psfval) < PSF_EPSILON) continue;
+        oldPSF = psfval;
 
         uint3 apos = make_uint3(round_(ofsPos.x), round_(ofsPos.y), round_(ofsPos.z)); //NN
         if (apos.x < reconstructed.size.x && apos.y < reconstructed.size.y && apos.z < reconstructed.size.z
@@ -372,7 +380,7 @@ __global__ void simulateSlicesKernel3D_tex(int numSlices,
           weight += psfval;
 
           slice_inside = 1;
-        }
+}
       }
     }
   }
@@ -383,25 +391,29 @@ __global__ void simulateSlicesKernel3D_tex(int numSlices,
   float3 _psfxyz = d_reconstructedW2I*(slicesTransformation[pos.z] * (sliceI2W[pos.z] * slicePos));
   psfxyz = make_float3(round_(_psfxyz.x), round_(_psfxyz.y), round_(_psfxyz.z));
 
-  for (int z = 0; z < dim; z++)
-    for (int y = 0; y < dim; y++)
+  for (int z = 0; z < dim; z++) {
+    for (int y = 0; y < dim; y++) {
+      float oldPSF = FLT_MAX;
       for (int x = 0; x < dim; x++)
       {
-    float3 ofsPos;
-    float psfval = getPSFParamsPrecomp(ofsPos, psfxyz, make_int3(x - centre, y - centre, z - centre), combInvTrans, slicePos, sliceDim);
-    if (abs(psfval) < PSF_EPSILON) continue;
+        float3 ofsPos;
+        float psfval = getPSFParamsPrecomp(ofsPos, psfxyz, make_int3(x - centre, y - centre, z - centre), combInvTrans, slicePos, sliceDim);
+        if (abs(oldPSF - psfval) < PSF_EPSILON) continue;
+        oldPSF = psfval;
 
-    uint3 apos = make_uint3(round_(ofsPos.x), round_(ofsPos.y), round_(ofsPos.z)); //NN
-    if (apos.x < reconstructed.size.x && apos.y < reconstructed.size.y && apos.z < reconstructed.size.z &&
-      mask[apos.x + apos.y*reconstructed.size.x + apos.z*reconstructed.size.x*reconstructed.size.y] != 0)
-    {
-      psfval /= sume;
-      simulated_sliceV += psfval * reconstructed[apos];
-      weight += psfval;
+        uint3 apos = make_uint3(round_(ofsPos.x), round_(ofsPos.y), round_(ofsPos.z)); //NN
+        if (apos.x < reconstructed.size.x && apos.y < reconstructed.size.y && apos.z < reconstructed.size.z &&
+          mask[apos.x + apos.y*reconstructed.size.x + apos.z*reconstructed.size.x*reconstructed.size.y] != 0)
+        {
+          psfval /= sume;
+          simulated_sliceV += psfval * reconstructed[apos];
+          weight += psfval;
 
-      slice_inside = 1;
-    }
+          slice_inside = 1;
+        }
       }
+    }
+  }
 
 #endif
 
@@ -488,7 +500,7 @@ __global__ void SuperresolutionKernel3D_tex(unsigned short numSlices, float* __r
             psfval * w * slice_weight * sliceVal);
           atomicAdd(&(confidence_map[apos.x + apos.y*addon.size.x + apos.z*addon.size.x*addon.size.y]),
             psfval * w * slice_weight);
-        }
+}
       }
     }
   }
@@ -500,25 +512,29 @@ __global__ void SuperresolutionKernel3D_tex(unsigned short numSlices, float* __r
   float3 _psfxyz = d_reconstructedW2I*(slicesTransformation[pos.z] * (sliceI2W[pos.z] * slicePos));
   psfxyz = make_float3(round_(_psfxyz.x), round_(_psfxyz.y), round_(_psfxyz.z));
 
-  for (int z = 0; z < dim; z++)
-    for (int y = 0; y < dim; y++)
+  for (int z = 0; z < dim; z++){
+    for (int y = 0; y < dim; y++) {
+      float oldPSF = FLT_MAX;
       for (int x = 0; x < dim; x++)
       {
-    float3 ofsPos;
-    float psfval = getPSFParamsPrecomp(ofsPos, psfxyz, make_int3(x - centre, y - centre, z - centre), combInvTrans, slicePos, sliceDim);
-    if (abs(psfval) < PSF_EPSILON) continue;
+        float3 ofsPos;
+        float psfval = getPSFParamsPrecomp(ofsPos, psfxyz, make_int3(x - centre, y - centre, z - centre), combInvTrans, slicePos, sliceDim);
+        if (abs(oldPSF - psfval) < PSF_EPSILON) continue;
+        oldPSF = psfval;
 
-    uint3 apos = make_uint3(ofsPos.x, ofsPos.y, ofsPos.z);
-    if (apos.x < addon.size.x && apos.y < addon.size.y && apos.z < addon.size.z &&
-      mask[apos.x + apos.y*addon.size.x + apos.z*addon.size.x*addon.size.y] != 0)
-    {
-      psfval /= sume;
-      atomicAdd(&(addon.data[apos.x + apos.y*addon.size.x + apos.z*addon.size.x*addon.size.y]),
-        psfval * w * slice_weight * sliceVal);
-      atomicAdd(&(confidence_map[apos.x + apos.y*addon.size.x + apos.z*addon.size.x*addon.size.y]),
-        psfval * w * slice_weight);
-    }
+        uint3 apos = make_uint3(ofsPos.x, ofsPos.y, ofsPos.z);
+        if (apos.x < addon.size.x && apos.y < addon.size.y && apos.z < addon.size.z &&
+          mask[apos.x + apos.y*addon.size.x + apos.z*addon.size.x*addon.size.y] != 0)
+        {
+          psfval /= sume;
+          atomicAdd(&(addon.data[apos.x + apos.y*addon.size.x + apos.z*addon.size.x*addon.size.y]),
+            psfval * w * slice_weight * sliceVal);
+          atomicAdd(&(confidence_map[apos.x + apos.y*addon.size.x + apos.z*addon.size.x*addon.size.y]),
+            psfval * w * slice_weight);
+        }
       }
+    }
+  }
 #endif
 }
 
@@ -550,7 +566,7 @@ __global__ void normalizeBiasKernel3D_tex(int numSlices, Volume<float> slices, V
   if (scale > 0)
   {
     nbias -= log(scale);
-  }
+}
 
   float3 sliceDim = d_slicedim[pos.z];
 
@@ -580,13 +596,15 @@ __global__ void normalizeBiasKernel3D_tex(int numSlices, Volume<float> slices, V
   {
     for (int y = 0; y < dim; y++)
     {
+      float oldPSF = FLT_MAX;
       for (int x = 0; x < dim; x++)
       {
         float3 ofsPos;
         //float psfval = getPSFParams(ofsPos, slicesTransformation[pos.z], slicesInvTransformation[pos.z],
         //  sliceI2W[pos.z], sliceW2I[pos.z], make_int3(x,y,z), centre, dim, make_float3((float)pos.x, (float)pos.y, 0), bias.dim, sliceDim);
         float psfval = getPSFParamsPrecomp(ofsPos, psfxyz, make_int3(x - centre, y - centre, z - centre), combInvTrans, slicePos, sliceDim);
-        if (abs(psfval) < PSF_EPSILON) continue;
+        if (abs(oldPSF - psfval) < PSF_EPSILON) continue;
+        oldPSF = psfval;
 
         uint3 apos = make_uint3(round_(ofsPos.x), round_(ofsPos.y), round_(ofsPos.z)); //NN
         if (apos.x < bias.size.x && apos.y < bias.size.y && apos.z < bias.size.z &&
@@ -604,6 +622,7 @@ __global__ void normalizeBiasKernel3D_tex(int numSlices, Volume<float> slices, V
   }
 
 }
+
 
 ///////////////////////////////test area PSF texture end
 
@@ -711,7 +730,7 @@ void Reconstruction::startThread(int i)
 
 
 void Reconstruction::generatePSFVolume(float* CPUPSF, uint3 PSFsize_, float3 sliceVoxelDim,
-  float3 PSFdim, Matrix4 PSFI2W, Matrix4 PSFW2I, float _quality_factor)
+  float3 PSFdim, Matrix4 PSFI2W, Matrix4 PSFW2I, float _quality_factor, bool _use_SINC)
 {
   std::cout << "generating PSF Volume..." << std::endl;
   PSFsize = PSFsize_;
@@ -720,7 +739,7 @@ void Reconstruction::generatePSFVolume(float* CPUPSF, uint3 PSFsize_, float3 sli
   if (multiThreadedGPU)
   {
     for (int d = 0; d < devicesToUse.size(); d++)
-      GPU_workers[d]->prepareGeneratePSFVolume(CPUPSF, PSFsize_, sliceVoxelDim, PSFdim, PSFI2W, PSFW2I, _quality_factor);
+      GPU_workers[d]->prepareGeneratePSFVolume(CPUPSF, PSFsize_, sliceVoxelDim, PSFdim, PSFI2W, PSFW2I, _quality_factor, _use_SINC);
     GPU_sync.runNextRound();
   }
   else
@@ -728,13 +747,13 @@ void Reconstruction::generatePSFVolume(float* CPUPSF, uint3 PSFsize_, float3 sli
     for (int d = 0; d < devicesToUse.size(); d++)
     {
       int dev = devicesToUse[d];
-      generatePSFVolumeOnX(CPUPSF, PSFsize_, sliceVoxelDim, PSFdim, PSFI2W, PSFW2I, _quality_factor, dev);
+      generatePSFVolumeOnX(CPUPSF, PSFsize_, sliceVoxelDim, PSFdim, PSFI2W, PSFW2I, _quality_factor, _use_SINC, dev);
     }
   }
 }
 
 void Reconstruction::generatePSFVolumeOnX(float* CPUPSF, uint3 PSFsize_, float3 sliceVoxelDim,
-  float3 PSFdim, Matrix4 PSFI2W, Matrix4 PSFW2I, float _quality_factor, int dev)
+  float3 PSFdim, Matrix4 PSFI2W, Matrix4 PSFW2I, float _quality_factor, bool _use_SINC, int dev)
 {
   checkCudaErrors(cudaSetDevice(dev));
   checkCudaErrors(cudaMemcpyToSymbol(d_PSFdim, &(PSFdim), sizeof(float3)));
@@ -742,6 +761,11 @@ void Reconstruction::generatePSFVolumeOnX(float* CPUPSF, uint3 PSFsize_, float3 
   checkCudaErrors(cudaMemcpyToSymbol(d_PSFI2W, &(PSFI2W), sizeof(Matrix4)));
   checkCudaErrors(cudaMemcpyToSymbol(d_PSFW2I, &(PSFW2I), sizeof(Matrix4)));
   checkCudaErrors(cudaMemcpyToSymbol(d_quality_factor, &(_quality_factor), sizeof(float)));
+  checkCudaErrors(cudaMemcpyToSymbol(d_use_SINC, &(_use_SINC), sizeof(bool)));
+  if (_use_SINC)
+  {
+    printf("using sinc like PSF.");
+  }
 }
 
 template <typename T>

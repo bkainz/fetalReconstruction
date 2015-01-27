@@ -146,7 +146,7 @@ void GPUWorkerCommunicator::execute()
 
       //generatePSFVolume // step = 1
     case 1:
-      reconstruction.generatePSFVolumeOnX(_CPUPSF, _PSFsize_, _sliceVoxelDim, _PSFdim, _PSFI2W, _PSFW2I, _quality_factor, GPU);
+      reconstruction.generatePSFVolumeOnX(_CPUPSF, _PSFsize_, _sliceVoxelDim, _PSFdim, _PSFI2W, _PSFW2I, _quality_factor, _use_SINC, GPU);
       break;
 
       //setSliceDims // step = 2

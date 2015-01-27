@@ -242,8 +242,8 @@ struct Reconstruction {
   void initStorageVolumesOnX(uint3 size, float3 dim, int start, int end, int dev);
   void FillSlices(float* sdata, std::vector<int> sizesX, std::vector<int> sizesY);
   void FillSlicesOnX(float* sdata, std::vector<int>& sizesX, std::vector<int>& sizesY, float* d_ldata, float * ldata, int dev, bool alloc);
-  void generatePSFVolume(float* CPUPSF, uint3 PSFsize_, float3 sliceVoxelDim, float3 PSFdim, Matrix4 PSFI2W, Matrix4 PSFW2I, float _quality_factor);
-  void generatePSFVolumeOnX(float* CPUPSF, uint3 PSFsize_, float3 sliceVoxelDim, float3 PSFdim, Matrix4 PSFI2W, Matrix4 PSFW2I, float _quality_factor, int dev);
+  void generatePSFVolume(float* CPUPSF, uint3 PSFsize_, float3 sliceVoxelDim, float3 PSFdim, Matrix4 PSFI2W, Matrix4 PSFW2I, float _quality_factor, bool _use_SINC);
+  void generatePSFVolumeOnX(float* CPUPSF, uint3 PSFsize_, float3 sliceVoxelDim, float3 PSFdim, Matrix4 PSFI2W, Matrix4 PSFW2I, float _quality_factor, bool _use_SINC, int dev);
   void setSliceDims(std::vector<float3> slice_dims, float _quality_factor);
   void setSliceDimsOnX(std::vector<float3>& slice_dims, std::vector<int>& sliceDim, bool allocate, int dev);
   void SetSliceMatrices(std::vector<Matrix4> matSliceTransforms, std::vector<Matrix4> matInvSliceTransforms,

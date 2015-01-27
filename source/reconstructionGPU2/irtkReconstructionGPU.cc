@@ -203,6 +203,7 @@ irtkReconstruction::irtkReconstruction(std::vector<int> dev, bool useCPUReg)
   _low_intensity_cutoff = 0.01;
   _global_bias_correction = false;
   _adaptive = false;
+  _use_SINC = false;
 
   int directions[13][3] = {
       { 1, 0, -1 },
@@ -1578,7 +1579,7 @@ void irtkReconstruction::generatePSFVolume()
     make_uint3(PSF.GetX(), PSF.GetY(), PSF.GetZ()),
     make_float3(_slices[0].GetXSize(), _slices[0].GetYSize(), _slices[0].GetZSize()),
     make_float3(PSF.GetXSize(), PSF.GetYSize(), PSF.GetZSize()), toMatrix4(PSF.GetImageToWorldMatrix()),
-    toMatrix4(PSF.GetWorldToImageMatrix()), _quality_factor);
+    toMatrix4(PSF.GetWorldToImageMatrix()), _quality_factor, _use_SINC);
 }
 
 void irtkReconstruction::CreateSlicesAndTransformations(vector<irtkRealImage> &stacks,

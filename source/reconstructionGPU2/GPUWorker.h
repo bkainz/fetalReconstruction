@@ -154,7 +154,7 @@ public:
   int GPU;
 
   //generatePSFVolume // step = 1
-  float* _CPUPSF; uint3 _PSFsize_; float3 _sliceVoxelDim; float3 _PSFdim; Matrix4 _PSFI2W; Matrix4 _PSFW2I; float _quality_factor;
+  float* _CPUPSF; uint3 _PSFsize_; float3 _sliceVoxelDim; float3 _PSFdim; Matrix4 _PSFI2W; Matrix4 _PSFW2I; float _quality_factor; bool _use_SINC;
   //setSliceDims // step = 2
   std::vector<float3>* _slice_dims; std::vector<int>* _sliceDim; bool _allocate;
   //setSliceMatrices // step = 3
@@ -219,10 +219,10 @@ public:
   GPUWorkerCommunicator(Reconstruction& reconstruction, GPUWorkerSync& workerSync, int GPU) : reconstruction(reconstruction), workerSync(workerSync), step(-2), GPU(GPU)
   { }
   void prepareGeneratePSFVolume(float* CPUPSF, uint3 PSFsize_, float3 sliceVoxelDim,
-    float3 PSFdim, Matrix4 PSFI2W, Matrix4 PSFW2I, float quality_factor)
+    float3 PSFdim, Matrix4 PSFI2W, Matrix4 PSFW2I, float quality_factor, bool use_SINC)
   {
     step = 1;
-    _CPUPSF = CPUPSF; _PSFsize_ = PSFsize_; _sliceVoxelDim = sliceVoxelDim; _PSFdim = PSFdim; _PSFI2W = PSFI2W; _quality_factor = quality_factor;
+    _CPUPSF = CPUPSF; _PSFsize_ = PSFsize_; _sliceVoxelDim = sliceVoxelDim; _PSFdim = PSFdim; _PSFI2W = PSFI2W; _quality_factor = quality_factor; _use_SINC = use_SINC;
   }
 
   void prepareSetSliceDims(std::vector<float3>& slice_dims, std::vector<int>& sliceDim, bool allocate)

@@ -155,6 +155,7 @@ int main(int argc, char **argv)
   string referenceVolumeName;
   unsigned int T1PackageSize = 0;
   unsigned int numDevicesToUse = UINT_MAX;
+  bool useSINCPSF = false;
 
   try
   {
@@ -197,6 +198,7 @@ int main(int argc, char **argv)
       ("useCPUReg", po::bool_switch(&useCPUReg)->default_value(true), "use CPU for more flexible CPU registration; performs superresolution and robust statistics on GPU. [default, best result]")
       ("useGPUReg", po::bool_switch(&useGPUReg)->default_value(false), "use faster but less accurate and flexible GPU registration; performs superresolution and robust statistics on GPU.")
       ("useAutoTemplate", po::bool_switch(&useAutoTemplate)->default_value(false), "select 3D registration template stack automatically with matrix rank method.")
+      ("useSINCPSF", po::bool_switch(&useSINCPSF)->default_value(false), "use a more MRI like SINC point spread function (PSF) Will be in plane sinc (Bartlett) and through plane Gaussian.")
       ("disableBiasCorrection", po::bool_switch(&disableBiasCorr)->default_value(false), "disable bias field correction for cases with little or no bias field inhomogenities (makes it faster but less reliable for stron intensity bias)");
     po::variables_map vm;
 
@@ -226,6 +228,7 @@ int main(int argc, char **argv)
       << e.what() << ", application will now exit" << std::endl;
     return EXIT_FAILURE;
   }
+
 
   if (useCPU)
   {
@@ -328,6 +331,11 @@ int main(int argc, char **argv)
   //Create reconstruction object
   // !useCPUReg = no multithreaded GPU, only multi-GPU
   irtkReconstruction reconstruction(devicesToUse, useCPUReg); // to emulate error for multi-threaded GPU
+
+  if (useSINCPSF)
+  {
+    reconstruction.useSINCPSF();
+  }
 
   reconstruction.Set_debugGPU(debug_gpu);
 

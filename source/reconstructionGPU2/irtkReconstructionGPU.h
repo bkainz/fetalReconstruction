@@ -171,6 +171,10 @@ protected:
 
   ///Quality factor - higher means slower and better
   double _quality_factor;
+
+  //use sinc like function or not
+  bool _use_SINC;
+
   ///Intensity min and max
   double _max_intensity;
   double _min_intensity;
@@ -387,6 +391,9 @@ public:
   ///Set smoothing parameters
   inline void SetSmoothingParameters(double delta, double lambda);
 
+  ///use in-plane sinc like PSF
+  inline void useSINCPSF();
+
   ///Use faster lower quality reconstruction
   inline void SpeedupOn();
 
@@ -548,6 +555,11 @@ inline void irtkReconstruction::DebugOff()
 inline void irtkReconstruction::SetSigma(double sigma)
 {
   _sigma_bias = sigma;
+}
+
+inline void irtkReconstruction::useSINCPSF()
+{
+  _use_SINC = true;
 }
 
 
