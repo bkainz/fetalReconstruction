@@ -1,6 +1,5 @@
 /*=========================================================================
 Library   : Image Registration Toolkit (IRTK)
-Module    : $Id: irtkReconstructionCuda.cc 1 2013-11-15 14:36:30 bkainz $
 Copyright : Imperial College, Department of Computing
 Visual Information Processing (VIP), 2011 onwards
 Date      : $Date: 2013-11-15 14:36:30 +0100 (Fri, 15 Nov 2013) $
@@ -11,13 +10,12 @@ Copyright (c) 2014, Bernhard Kainz, Markus Steinberger,
 Maria Murgasova, Kevin Keraudren
 All rights reserved.
 
-If you use this work for research we would very much appreciate if you
-could cite
-TODO: update as soon as accepted
-Bernhard Kainz, Markus Steinberger, Christina Malamateniou, Wolfgang Wein, Maria Murgasova,
-Kevin Keraudren, Thomas Torsney-Weir, Mary Rutherford, Joseph  V. Hajnal, and Daniel Rueckert:
-Generalized Fast Volume Reconstruction from Motion Corrupted 2D Slices.
-IEEE Transactions on Medical Imaging, under review, 2014
+If you use this work for research we would very much appreciate if you cite
+Bernhard Kainz, Markus Steinberger, Maria Kuklisova-Murgasova, Christina Malamateniou,
+Wolfgang Wein, Thomas Torsney-Weir, Torsten Moeller, Mary Rutherford,
+Joseph V. Hajnal and Daniel Rueckert:
+Fast Volume Reconstruction from Motion Corrupted 2D Slices.
+IEEE Transactions on Medical Imaging, in press, 2015
 
 IRTK IS PROVIDED UNDER THE TERMS OF THIS CREATIVE
 COMMONS PUBLIC LICENSE ("CCPL" OR "LICENSE"). THE WORK IS PROTECTED BY
@@ -49,7 +47,6 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 =========================================================================*/
-
 #include <irtkImage.h>
 #include <irtkTransformation.h>
 #include <irtkReconstructionGPU.h>
