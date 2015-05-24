@@ -174,7 +174,7 @@ Execute
   --useCPU                           use CPU for reconstruction and
                                      registration; performs superresolution and
                                      robust statistics on CPU. Default is using
-                                     the GPU -- Needs update, currently not working
+                                     the GPU
 
   --useCPUReg                        use CPU for more flexible CPU
                                      registration; performs superresolution and
