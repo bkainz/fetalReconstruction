@@ -10,6 +10,14 @@ from Motion Corrupted Stacks of 2D Slices. IEEE Transactions on Medical Imaging,
 to appear, 2015. doi:10.1109/TMI.2015.2415453 
 
 
+Announcements
+======================
+- The --useCPU flag has some bug currently and might have caused some confusion. CPU only does not  provide
+   the full functionality of the GPU version. For example PSF sampling is different and the result of the 
+   CPU version will be worse. -- I am working on it. Will announce when the CPU only version is working again.
+- There seem to be an issue with CUDA 7. Please use CUDA 6.5 until I found the problem.
+
+
 Abstract
 ======================
 Moving objects cause motion artefacts when their enclosing volume is acquired as a stack of image slices. 
@@ -25,9 +33,8 @@ The source code was successfully compiled on x86_64, CUDA 6.5, VS2012 (std-c++11
 #### Necessary Hardware requirements
 * x86_64 CPU
 
-#### Optional Hardware requirements
+#### Hardware requirements
 * Nvidia GPU compute capability >= 3.0 
-In case of no GPU: only CPU reconstruction will be available. Use --useCPU flag [CUDA is still necessary to compile!]
 
 #### Necessary third party libraries
 * Nvidia CUDA >= 6.0 https://developer.nvidia.com/cuda-downloads
