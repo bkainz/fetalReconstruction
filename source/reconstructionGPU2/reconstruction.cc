@@ -80,7 +80,6 @@ const std::string currentDateTime() {
 
 int main(int argc, char **argv)
 {
-  cudaDeviceReset();
   std::cout << "starting reconstruction on " << currentDateTime() << std::endl;
   //utility variables
   int i, ok;
@@ -229,8 +228,13 @@ int main(int argc, char **argv)
 
   if (useCPU)
   {
+    //security measure for wrong input params
     useCPUReg = true;
     useGPUReg = false;
+  }
+  else
+  {
+    cudaDeviceReset();
   }
  
   if (useGPUReg) useCPUReg = false;
@@ -327,7 +331,7 @@ int main(int argc, char **argv)
 
   //Create reconstruction object
   // !useCPUReg = no multithreaded GPU, only multi-GPU
-  irtkReconstruction reconstruction(devicesToUse, useCPUReg); // to emulate error for multi-threaded GPU
+  irtkReconstruction reconstruction(devicesToUse, useCPUReg, useCPU); // to emulate error for multi-threaded GPU
 
   if (useSINCPSF)
   {
@@ -943,7 +947,7 @@ int main(int argc, char **argv)
       {
         reconstruction.Superresolution(i + 1);
 
-#if 1
+#if 0
         reconstructed = reconstruction.GetReconstructed();
         sprintf(buffer, "superCPU%i.nii", i);
         reconstructed.Write(buffer);

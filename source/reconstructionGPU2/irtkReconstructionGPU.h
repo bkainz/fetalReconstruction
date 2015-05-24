@@ -224,12 +224,13 @@ protected:
   Reconstruction* reconstructionGPU;
 
   bool _useCPUReg;
+  bool _useCPU;
   bool _debugGPU;
 
 public:
 
   ///Constructor
-  irtkReconstruction(std::vector<int> dev, bool useCPUReg);
+  irtkReconstruction(std::vector<int> dev, bool useCPUReg, bool useCPU = false);
   ///Destructor
   ~irtkReconstruction();
 

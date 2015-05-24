@@ -179,7 +179,7 @@ void centroid(irtkRealImage &image,
 
 /*   end of auxiliary functions */
 
-irtkReconstruction::irtkReconstruction(std::vector<int> dev, bool useCPUReg)
+irtkReconstruction::irtkReconstruction(std::vector<int> dev, bool useCPUReg, bool useCPU)
 {
   _step = 0.0001;
   _debug = false;
@@ -223,6 +223,7 @@ irtkReconstruction::irtkReconstruction(std::vector<int> dev, bool useCPUReg)
       _directions[i][j] = directions[i][j];
 
   _useCPUReg = useCPUReg;
+  _useCPU = useCPU;
   //FIXXME
   //TODO as possible workaround, but ugly -- dactiveates multithreading in cu
  // reconstructionGPU = new Reconstruction(dev, !_useCPUReg);
@@ -232,7 +233,10 @@ irtkReconstruction::irtkReconstruction(std::vector<int> dev, bool useCPUReg)
   }
   else
   {*/
+  if(!useCPU)
+  {
     reconstructionGPU = new Reconstruction(dev, true); //to produce the error for CPUReg and multithreaded GPUs
+  }
   //}
 
 }
@@ -244,7 +248,8 @@ irtkReconstruction::~irtkReconstruction(){ }
 void irtkReconstruction::Set_debugGPU(bool val)
 {
   _debugGPU = val;
-  reconstructionGPU->_debugGPU = val;
+  if(!_useCPU)
+    reconstructionGPU->_debugGPU = val;
 }
 
 
@@ -253,7 +258,8 @@ void irtkReconstruction::Set_debugGPU(bool val)
 //GPU helpers
 void irtkReconstruction::updateStackSizes(std::vector<uint3> stack_sizes_)
 {
-  reconstructionGPU->updateStackSizes(stack_sizes_);
+   if(!_useCPU)
+    reconstructionGPU->updateStackSizes(stack_sizes_);
 }
 
 void irtkReconstruction::SyncGPU()
@@ -1613,7 +1619,8 @@ void irtkReconstruction::CreateSlicesAndTransformations(vector<irtkRealImage> &s
       _transformations_gpu.push_back(stack_transformations[i]);
     }
   }
-  reconstructionGPU->updateStackSizes(stack_sizes_);
+  if(!_useCPU)
+    reconstructionGPU->updateStackSizes(stack_sizes_);
 
   cout << "Number of slices: " << _slices.size() << endl;
 }
