@@ -12,12 +12,11 @@ Maria Murgasova, Kevin Keraudren
 All rights reserved.
 
 If you use this work for research we would very much appreciate if you
-could cite
-TODO: update as soon as accepted
-Bernhard Kainz, Markus Steinberger, Christina Malamateniou, Wolfgang Wein, Maria Murgasova,
-Kevin Keraudren, Thomas Torsney-Weir, Mary Rutherford, Joseph  V. Hajnal, and Daniel Rueckert:
-Generalized Fast Volume Reconstruction from Motion Corrupted 2D Slices.
-IEEE Transactions on Medical Imaging, under review, 2014
+Bernhard Kainz, Markus Steinberger, Wolfgang Wein, Maria Kuklisova-Murgasova, 
+Christina Malamateniou, Kevin Keraudren, Thomas Torsney-Weir, Mary Rutherford, 
+Paul Aljabar, Joseph V. Hajnal, and Daniel Rueckert: Fast Volume Reconstruction 
+from Motion Corrupted Stacks of 2D Slices. IEEE Transactions on Medical Imaging, 
+in print, 2015. doi:10.1109/TMI.2015.2415453 
 
 IRTK IS PROVIDED UNDER THE TERMS OF THIS CREATIVE
 COMMONS PUBLIC LICENSE ("CCPL" OR "LICENSE"). THE WORK IS PROTECTED BY
