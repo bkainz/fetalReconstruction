@@ -12,6 +12,7 @@ in print, 2015. doi:10.1109/TMI.2015.2415453
 
 Announcements
 ======================
+- this repository will soon be updated with a newer version of SVR and additional functionalities
 - The --useCPU flag has some bug currently and might have caused some confusion. CPU only does not  provide
    the full functionality of the GPU version. For example PSF sampling is different and the result of the 
    CPU version will be worse. -- I am working on it.
