@@ -83,3 +83,4 @@ template <class VoxelType> void irtkDilation<VoxelType>::Run()
 template class irtkDilation<irtkBytePixel>;
 template class irtkDilation<irtkGreyPixel>;
 template class irtkDilation<irtkRealPixel>;
+template class irtkDilation<float>;

@@ -1,69 +1,34 @@
-# check if we have c++11
-include(CheckCXXCompilerFlag)
-CHECK_CXX_COMPILER_FLAG("-std=c++11" COMPILER_SUPPORTS_CXX11)
-CHECK_CXX_COMPILER_FLAG("-std=c++0x" COMPILER_SUPPORTS_CXX0X)
-if(COMPILER_SUPPORTS_CXX11)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
-	message("USING -std=c++11")
-elseif(COMPILER_SUPPORTS_CXX0X)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++0x")
-	message("USING -std=c++0x")
-else()
-    message(STATUS "The compiler ${CMAKE_CXX_COMPILER} has no C++11 support. Please use a different C++ compiler.")
-endif()
+if(CMAKE_COMPILER_IS_GNUCC)
+    add_definitions(-Wall -Wextra -pedantic)
+    add_definitions(-Wcast-align)
+    add_definitions(-Wcast-qual)
+    add_definitions(-Wdisabled-optimization)
+    add_definitions(-Wstrict-aliasing)
+    add_definitions(-Wunknown-pragmas)
+endif(CMAKE_COMPILER_IS_GNUCC)
 
-
-
-# CUDA
-option(CUDA_BUILD_EMULATION "enable emulation mode" OFF)
-find_package(CUDA REQUIRED COMPONENTS sdk npp thrust)
-# FindCUDA.cmake of CMake 2.8.7 does not look for NPP
-if (NOT DEFINED CUDA_npp_LIBRARY AND COMMAND find_cuda_helper_libs AND NOT CUDA_VERSION VERSION_LESS "4.0")
-  find_cuda_helper_libs(npp)
-endif ()
-include_directories(${CUDA_INCLUDE_DIRS})
-#message("CUDA_INCLUDE_DIRS: ${CUDA_INCLUDE_DIRS}")
-# hide variable as SDK now (usually) part of CUDA Toolkit
-# mark_as_advanced(FORCE CUDA_SDK_ROOT_DIR)
-# additional directories where to look for SDK which are
-# not yet added in FindCUDA.cmake of CMake
-list(APPEND INTERNAL_CUDA_SDK_SEARCH_PATH "$ENV{CUDA_SDK_INCLUDE_DIR}") 
-list(APPEND INTERNAL_CUDA_SDK_SEARCH_PATH "/usr/local/cuda-5.5-sdk/NVIDIA_CUDA-5.5_Samples/")
-list(APPEND INTERNAL_CUDA_SDK_SEARCH_PATH "/usr/local/cuda-6.0-sdk/NVIDIA_CUDA-6.0_Samples/")
-list(APPEND INTERNAL_CUDA_SDK_SEARCH_PATH "/opt/cuda-6.0/samples")
-if(WIN32)
-list(APPEND INTERNAL_CUDA_SDK_SEARCH_PATH "[HKEY_LOCAL_MACHINE\\SOFTWARE\\NVIDIA Corporation\\Installed Products\\NVIDIA SDK 10\\Compute;InstallDir]") 
-endif()
-list(APPEND INTERNAL_CUDA_SDK_SEARCH_PATH "C:/ProgramData/NVIDIA Corporation/CUDA Samples/v5.5/") 
-
-find_path(CUDA_HELPER_INCLUDE_DIR
-  helper_cuda.h
-  PATHS          ${INTERNAL_CUDA_SDK_SEARCH_PATH}
-  PATH_SUFFIXES "/common/inc"
-  DOC           "Location of helper_cuda.h of the CUDA SDK."
-  NO_DEFAULT_PATH
-)
-
-if (CUDA_HELPER_INCLUDE_DIR)
-  include_directories(${CUDA_HELPER_INCLUDE_DIR})
-  set(CUDA_SDK_ROOT_DIR ${CUDA_HELPER_INCLUDE_DIR})
- # message("CUDA_SDK_ROOT_DIR: ${CUDA_SDK_ROOT_DIR}")
-else(CUDA_HELPER_INCLUDE_DIR)
-   message("CUDA_SDK_ROOT_DIR: really not found")	
-endif(CUDA_HELPER_INCLUDE_DIR) 
+set(CONFIG_SUMMARY ${CMAKE_CURRENT_BINARY_DIR}/config.summary)
+file(REMOVE ${CONFIG_SUMMARY})
+get_filename_component(PROJECT_SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}/.. REALPATH)
+set(CTEST_SOURCE_DIRECTORY ${PROJECT_SOURCE_DIR})
+set(CTEST_BINARY_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+message(STATUS "CTEST_BINARY_DIRECTORY = ${CTEST_BINARY_DIRECTORY}.")
+include(${PROJECT_SOURCE_DIR}/cmake/SciFuncsMacros.cmake)
+find_package(SciCuda REQUIRED COMPONENTS sdk npp thrust)
+include_directories(${CUDA_HELPER_INCLUDE_DIR})
 include_directories(${CUDA_SDK_ROOT_DIR}/common/inc)
+set(CUDA_SEPARABLE_COMPILATION ON)
 
-if( ${CUDA_VERSION} VERSION_LESS "5")
-  message(INFO "Building with CUDA < 5.0")
-else()
-  message(STATUS "Building with CUDA >= 5.0")
-  # we build for all useful compute capabilities (C.P > 2.0)
-  #set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS};-gencode;arch=compute_12,code=sm_12;-gencode;arch=compute_20,code=sm_21;-gencode;arch=compute_20,code=sm_20;-gencode;arch=compute_30,code=sm_30;")
-  set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS};-gencode;arch=compute_30,code=sm_30;-gencode;arch=compute_35,code=sm_35;-use_fast_math;")
-  #-deviceemu -use_fast_math;
-  #untested for CP < 2.0
-  #set(CUDA_NVCC_FLAGS "-gencode;arch=compute_12,code=sm_12;--disable-warnings")
+list(APPEND CUDA_NVCC_FLAGS -keep --shared --compiler-options -fPIC -lineinfo )
+
+if(NOT CUDA_SDK_ROOT_DIR)
+message("I tried but I couldn't find the CUDA SDK. please set CUDA_SDK_ROOT_DIR manually to the samples directory of the CUDA toolkit!")
 endif()
+
+if(UNIX)
+set(CUDA_PROPAGATE_HOST_FLAGS OFF)
+endif(UNIX)
+
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../IRTKSimple2/common++/include
 	${CMAKE_CURRENT_SOURCE_DIR}/../IRTKSimple2/contrib++/include
@@ -72,6 +37,8 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../IRTKSimple2/common++/include
 	${CMAKE_CURRENT_SOURCE_DIR}/../IRTKSimple2/packages/transformation/include
 	${CMAKE_CURRENT_SOURCE_DIR}/../IRTKSimple2/packages/registration/include
 	${CMAKE_CURRENT_SOURCE_DIR}
+	${CMAKE_CURRENT_SOURCE_DIR}/include
+	${CMAKE_CURRENT_SOURCE_DIR}/include/GPUGauss
 	)
 
 if(UNIX)
@@ -87,10 +54,10 @@ endif(BUILD_WITH_CULA)
 #need to check if Unix is sane
 # add boost dependencies
 if(UNIX)
-find_package( Boost 1.46 REQUIRED COMPONENTS program_options filesystem system thread)
+find_package( Boost 1.58 REQUIRED COMPONENTS program_options filesystem system thread)
 add_definitions(-DUSE_BOOST=1)
 else(UNIX)
-find_package( Boost 1.46 REQUIRED COMPONENTS program_options thread)
+find_package( Boost 1.58 REQUIRED COMPONENTS program_options thread)
 add_definitions(-DBOOST_NO_CXX11_ALLOCATOR)
 if(MSVC11)
 add_definitions(-DUSE_BOOST=0)
@@ -106,27 +73,112 @@ endif ()
 include_directories(${Boost_INCLUDE_DIRS})
 link_directories(${Boost_LIBRARY_DIRS})
 
-cuda_include_directories(${CMAKE_CURRENT_SOURCE_DIR}/GPUGauss)
-cuda_add_library(reconstruction_cuda_lib2 
-				reconstruction_cuda2.cu 
-				reconstruction_cuda2.cuh 
-				recon_volumeHelper.cuh 
+if( (Boost_VERSION GREATER 105999) AND
+     (NOT CUDA_VERSION VERSION_EQUAL 7.5) AND
+     (NOT CMAKE_CXX_STANDARD EQUAL 98) )
+      # Boost Bug https://svn.boost.org/trac/boost/ticket/11897
+	# message(STATUS "Boost: Disable variadic templates")
+	# add_definitions(-DBOOST_NO_CXX11_VARIADIC_TEMPLATES)
+	# message(STATUS "Boost: Disable template aliases")
+    add_definitions(-DBOOST_NO_CXX11_TEMPLATE_ALIASES)
+  endif()
+
+#set(CUDA_ATTACH_VS_BUILD_RULE_TO_CUDA_FILE ON)
+#set(BUILD_SHARED_LIBS OFF)
+set(CUDA_SEPARABLE_COMPILATION ON)
+
+cuda_include_directories(${CMAKE_CURRENT_SOURCE_DIR}/GPUGauss ${CMAKE_CURRENT_SOURCE_DIR})
+
+SET(RECON_MAIN_HDRS
+	irtkReconstructionGPU.h
+	perfstats.h
+	stackMotionEstimator.h
+	)
+
+SET(RECON_MAIN_SRCS reconstruction.cc 
+		irtkReconstructionGPU.cc 
+        stackMotionEstimator.cpp )
+
+SET(RECON_LIB_SRCS
+	include/reconstruction_cuda2.cuh 
+	include/recon_volumeHelper.cuh 
+	include/GPUGauss/gaussFilterConvolution.cuh
+	include/GPUWorker.h
+)
+SET(RECON_LIB_SRCS reconstruction_cuda2.cu 
 				GPUGauss/gaussfilter.cu 
-				GPUGauss/gaussFilterConvolution.cuh
 				GPUWorker.cpp
-				GPUWorker.h)
+				)
 
-add_executable(reconstruction_GPU2 reconstruction.cc irtkReconstructionGPU.cc 
-          irtkReconstructionGPU.h 
-          perfstats.h
-          stackMotionEstimator.cpp stackMotionEstimator.h)
-
-target_link_libraries(reconstruction_GPU2 ${IRTK_LIBRARIES} ${TBB_LIBRARIES} ${GSL_LIBRARIES} reconstruction_cuda_lib2)
-
-if(UNIX)
-target_link_libraries(reconstruction_GPU2 ${Boost_LIBRARIES})
-endif(UNIX)
+#message(${CUDA_NVCC_FLAGS})
+cuda_add_library(SVRreconstructionGPU_lib ${RECON_LIB_SRCS} ${RECON_LIB_HDRS})
+cuda_add_executable(SVRreconstructionGPU ${RECON_MAIN_SRCS} ${RECON_MAIN_HDRSS})
+target_link_libraries(SVRreconstructionGPU ${IRTK_LIBRARIES} ${TBB_LIBRARIES} ${GSL_LIBRARIES} ${CUDA_CUDADEVRT_LIBRARY} 
+	${CUDA_CUDA_LIBRARY} ${CUDA_CUDART_LIBRARY} SVRreconstructionGPU_lib)
 
 if(BUILD_WITH_CULA)
-target_link_libraries(reconstruction_GPU2 ${CULA_LIBRARIES} )
+target_link_libraries(SVRreconstructionGPU ${CULA_LIBRARIES} )
 endif(BUILD_WITH_CULA)
+
+SET(PATCHRECON_MAIN_HDRS
+	include/irtkPatchBasedReconstruction.h 
+	include/nDRegistration.h
+	include/irtkStack3D3DRegistration.h
+	include/patchBased2D3DRegistration.h
+	include/patchBasedPackageSplitter.h
+	include/runStackSLIC.h
+)
+
+SET(PATCHRECON_MAIN_SRCS patchBasedReconMain.cpp 
+		irtkPatchBasedReconstruction.cpp 	
+		irtkStack3D3DRegistration.cpp	
+		patchBased2D3DRegistration.cpp	
+		patchBasedPackageSplitter.cpp	
+		runStackSLIC.cpp)
+
+SET(PATCHRECON_LIB_HDRS 
+		include/patchBasedVolume.cuh 
+		include/patchBasedObject.cuh 
+		include/reconVolume.cuh
+		include/matrix4.cuh
+		include/volume.cuh
+		include/reconConfig.cuh
+		include/ImagePatch2D.cuh
+		include/pointSpreadFunction.cuh
+		include/patchBasedSuperresolution_gpu.cuh
+		include/patchBasedRobustStatistics_gpu.cuh
+		include/patchBased2D3DRegistration_gpu2.cuh
+		include/interpFunctions.cuh
+		include/GPUGauss/patchBasedGaussFilterConvolution.cuh
+)
+
+SET(PATCHRECON_LIB_SRCS 
+		initPatchBasedRecon_gpu.cu
+		patchBasedPSFReconstruction_gpu.cu
+		volume.cu
+		reconVolume.cu
+		GPUGauss/patchBasedGaussfilter.cu
+		patchBasedSimulatePatches_gpu.cu
+		patchBasedSuperresolution_gpu.cu
+		patchBasedRobustStatistics_gpu.cu
+		patchBased2D3DRegistration_gpu2.cu
+		runStackSLIC.cpp)
+
+set(PVR_TOOL TRUE)
+if(PVR_TOOL)
+  cuda_add_library(patchBasedReconlib  ${PATCHRECON_LIB_SRCS} ${PATCHRECON_LIB_HDRS})
+  cuda_add_executable(PVRreconstructionGPU ${PATCHRECON_MAIN_SRCS} ${PATCHRECON_MAIN_HDRS})
+  target_link_libraries(PVRreconstructionGPU ${IRTK_LIBRARIES} ${TBB_LIBRARIES} 
+	${GSL_LIBRARIES} ${CUDA_CUDADEVRT_LIBRARY} ${CUDA_CUDA_LIBRARY} ${CUDA_CUDART_LIBRARY} patchBasedReconlib)
+endif(PVR_TOOL)
+
+if(UNIX)
+target_link_libraries(SVRreconstructionGPU ${Boost_LIBRARIES})
+if(PVR_TOOL)
+target_link_libraries(PVRreconstructionGPU ${Boost_LIBRARIES})
+endif(PVR_TOOL)
+endif(UNIX)
+
+
+SET(EVALUATION_FUNCTIONS OFF CACHE BOOL "Turn on evaluation functions (for research)")
+add_definitions( -DEVALUATE=${EVALUATION_FUNCTIONS} )

@@ -404,11 +404,11 @@ void irtkImageRegistration::Finalize(int level)
   }
 #endif
 
-  delete tmp_target;
+ /* delete tmp_target;
   delete tmp_source;
   delete _metric;
   delete _optimizer;
-  delete _interpolator;
+  delete _interpolator;*/
 }
 
 void irtkImageRegistration::Run()
@@ -462,10 +462,14 @@ void irtkImageRegistration::Run()
     this->Initialize(level);
 
     // Save pre-processed images if we are debugging
-    sprintf(buffer, "source_%d.nii.gz", level);
-    if (_DebugFlag == true) _source->Write(buffer);
-    sprintf(buffer, "target_%d.nii.gz", level);
-    if (_DebugFlag == true) _target->Write(buffer);
+    if (_DebugFlag == true){
+      sprintf(buffer, "source_%d.nii.gz", level);
+      _source->Write(buffer);
+    }
+    if (_DebugFlag == true){
+      sprintf(buffer, "target_%d.nii.gz", level);
+      _target->Write(buffer);
+    }
 
 #ifdef HAS_TBB
     task_scheduler_init init(tbb_no_threads);

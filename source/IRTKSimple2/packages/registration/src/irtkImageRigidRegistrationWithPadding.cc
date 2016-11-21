@@ -301,7 +301,7 @@ void irtkImageRigidRegistrationWithPadding::GuessParameterThickSlicesNMI()
   }
 }
 
-void irtkImageRigidRegistrationWithPadding::GuessParameterSliceToVolume()
+void irtkImageRigidRegistrationWithPadding::GuessParameterSliceToVolume(bool useNMI)
 {
   int i;
   double xsize, ysize, zsize;
@@ -312,11 +312,13 @@ void irtkImageRigidRegistrationWithPadding::GuessParameterSliceToVolume()
   }
 
   // Default parameters for registration
-  _NumberOfLevels     = 2;
+  _NumberOfLevels     = 3;
   _NumberOfBins       = 64;
 
   // Default parameters for optimization
-  _SimilarityMeasure  = CC;
+  _SimilarityMeasure  = CC; //NMI
+  if(useNMI)
+    _SimilarityMeasure  = NMI;
   _OptimizationMethod = GradientDescent;
   _Epsilon            = 0.0001;
 

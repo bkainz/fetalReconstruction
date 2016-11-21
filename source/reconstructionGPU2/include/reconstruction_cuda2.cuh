@@ -1,51 +1,27 @@
 /*=========================================================================
-Library   : Image Registration Toolkit (IRTK)
-Copyright : Imperial College, Department of Computing
-Visual Information Processing (VIP), 2011 onwards
-Date      : $Date: 2013-11-15 14:36:30 +0100 (Fri, 15 Nov 2013) $
-Version   : $Revision: 1 $
-Changes   : $Author: bkainz $
-
-Copyright (c) 2014, Bernhard Kainz, Markus Steinberger,
-Maria Murgasova, Kevin Keraudren
-All rights reserved.
-
-If you use this work for research we would very much appreciate if you cite
-Bernhard Kainz, Markus Steinberger, Wolfgang Wein, Maria Kuklisova-Murgasova, 
-Christina Malamateniou, Kevin Keraudren, Thomas Torsney-Weir, Mary Rutherford, 
-Paul Aljabar, Joseph V. Hajnal, and Daniel Rueckert: Fast Volume Reconstruction 
-from Motion Corrupted Stacks of 2D Slices. IEEE Transactions on Medical Imaging, 
-in print, 2015. doi:10.1109/TMI.2015.2415453 
-
-IRTK IS PROVIDED UNDER THE TERMS OF THIS CREATIVE
-COMMONS PUBLIC LICENSE ("CCPL" OR "LICENSE"). THE WORK IS PROTECTED BY
-COPYRIGHT AND/OR OTHER APPLICABLE LAW. ANY USE OF THE WORK OTHER THAN
-AS AUTHORIZED UNDER THIS LICENSE OR COPYRIGHT LAW IS PROHIBITED.
-
-BY EXERCISING ANY RIGHTS TO THE WORK PROVIDED HERE, YOU ACCEPT AND AGREE
-TO BE BOUND BY THE TERMS OF THIS LICENSE. TO THE EXTENT THIS LICENSE MAY BE
-CONSIDERED TO BE A CONTRACT, THE LICENSOR GRANTS YOU THE RIGHTS CONTAINED
-HERE IN CONSIDERATION OF YOUR ACCEPTANCE OF SUCH TERMS AND CONDITIONS.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-
-1. Redistributions of source code must retain the above copyright notice, this
-list of conditions and the following disclaimer.
-2. Redistributions in binary form must reproduce the above copyright notice,
-this list of conditions and the following disclaimer in the documentation
-and/or other materials provided with the distribution.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
-ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
-ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+* GPU accelerated motion compensation for MRI
+*
+* Copyright (c) 2016 Bernhard Kainz, Amir Alansary, Maria Kuklisova-Murgasova,
+* Kevin Keraudren, Markus Steinberger
+* (b.kainz@imperial.ac.uk)
+*
+* Permission is hereby granted, free of charge, to any person obtaining a copy
+* of this software and associated documentation files (the "Software"), to deal
+* in the Software without restriction, including without limitation the rights
+* to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+* copies of the Software, and to permit persons to whom the Software is
+* furnished to do so, subject to the following conditions:
+*
+* The above copyright notice and this permission notice shall be included in
+* all copies or substantial portions of the Software.
+*
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+* AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+* LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+* FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+* IN THE SOFTWARE.
 =========================================================================*/
 #ifndef RECONSTRUCTION_CUDA_CUH
 #define RECONSTRUCTION_CUDA_CUH
@@ -68,7 +44,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <thrust/iterator/zip_iterator.h>
 #include <thrust/functional.h>
 #include <thrust/advance.h>
-#include <thrust/transform_reduce.h>
 #include <thrust/tuple.h>
 #include <thrust/count.h>
 #include "recon_volumeHelper.cuh"
@@ -82,16 +57,19 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 //usually the kernel runtime watchdog is activated in windows -- workaround:
 #if WIN32 
-#define MAX_SLICES_PER_RUN_GAUSS 1
-#define MAX_SLICES_PER_RUN 1
+#define MAX_SLICES_PER_RUN_GAUSS 32
+#define MAX_SLICES_PER_RUN 128
 #else
 #define MAX_SLICES_PER_RUN_GAUSS 1000
-#define MAX_SLICES_PER_RUN 1000
+#define MAX_SLICES_PER_RUN 5000
 #endif
 //maximum number of GPUs running in parallel
 #define MAX_GPU_COUNT 32 
 
-#define PSF_EPSILON 0.01
+//use a sinc in-plane gauss through plane PSF 
+#define USE_SINC_PSF 1
+
+#define PSF_EPSILON 0.00001
 #define USE_INFINITE_PSF_SUPPORT 1
 #define MAX_PSF_SUPPORT 16
 //configuration section end
@@ -111,8 +89,8 @@ inline int divup(int a, int b) { return (a + b - 1) / b; }
 inline dim3 divup(uint2 a, dim3 b) { return dim3(divup(a.x, b.x), divup(a.y, b.y)); }
 inline dim3 divup(dim3 a, dim3 b) { return dim3(divup(a.x, b.x), divup(a.y, b.y), divup(a.z, b.z)); }
 
-struct Reconstruction {
-
+class Reconstruction {
+public:
   Reconstruction(std::vector<int> dev, bool multiThreadedGPU = true);
   ~Reconstruction();
 
@@ -237,8 +215,8 @@ struct Reconstruction {
   void initStorageVolumesOnX(uint3 size, float3 dim, int start, int end, int dev);
   void FillSlices(float* sdata, std::vector<int> sizesX, std::vector<int> sizesY);
   void FillSlicesOnX(float* sdata, std::vector<int>& sizesX, std::vector<int>& sizesY, float* d_ldata, float * ldata, int dev, bool alloc);
-  void generatePSFVolume(float* CPUPSF, uint3 PSFsize_, float3 sliceVoxelDim, float3 PSFdim, Matrix4 PSFI2W, Matrix4 PSFW2I, float _quality_factor, bool _use_SINC);
-  void generatePSFVolumeOnX(float* CPUPSF, uint3 PSFsize_, float3 sliceVoxelDim, float3 PSFdim, Matrix4 PSFI2W, Matrix4 PSFW2I, float _quality_factor, bool _use_SINC, int dev);
+  void generatePSFVolume(float* CPUPSF, uint3 PSFsize_, float3 sliceVoxelDim, float3 PSFdim, Matrix4 PSFI2W, Matrix4 PSFW2I, float _quality_factor);
+  void generatePSFVolumeOnX(float* CPUPSF, uint3 PSFsize_, float3 sliceVoxelDim, float3 PSFdim, Matrix4 PSFI2W, Matrix4 PSFW2I, float _quality_factor, int dev);
   void setSliceDims(std::vector<float3> slice_dims, float _quality_factor);
   void setSliceDimsOnX(std::vector<float3>& slice_dims, std::vector<int>& sliceDim, bool allocate, int dev);
   void SetSliceMatrices(std::vector<Matrix4> matSliceTransforms, std::vector<Matrix4> matInvSliceTransforms,
@@ -262,6 +240,12 @@ struct Reconstruction {
   void setMask(uint3 s, float3 dim, float* data, float sigma_bias);
   void setMaskOnX(uint3 s, float3 dim, float* data, float sigma_bias, int dev);
   void cleanUpOnX(int dev);
+  void setPachBased(bool value){ _patchBased = value; };
+
+  //--------------------------------------------------------------------------------------------
+  // superpixel (spx)
+  void setSupepixelBased(bool value){ _superpixelBased = value; };
+  //--------------------------------------------------------------------------------------------
 
   //calculation functions
   void NormaliseBias(int iter, float sigma_bias);
@@ -280,6 +264,8 @@ struct Reconstruction {
     float _min_intensity, float _max_intensity, float delta, float lambda, bool _global_bias_correction, float sigma_bias,
     float _low_intensity_cutoff);
   void SuperresolutionOnX1(int N, Volume<float>& dev_addon_accbuf_, Volume<float>& dev_cmap_accbuf_, Volume<float>& original, int dev);
+
+  void transformManualMaskGPU(float* manualMaskdata, unsigned int numSlices, uint2 sliceSize, float* outdata);
 
   void maskVolume();
   void ScaleVolume();
@@ -329,6 +315,13 @@ struct Reconstruction {
   int _NumberOfSteps;
   int _NumberOfIterations;
   float h_quality_factor;
+  bool _patchBased;
+  bool _disableBiasC;
+
+  //--------------------------------------------------------------------------------------------
+  // superpixel (spx)
+  bool _superpixelBased;
+  //--------------------------------------------------------------------------------------------
 
   void initRegStorageVolumes(uint3 size, float3 dim);
   void initRegStorageVolumesOnX(uint3 size, float3 dim, bool init, int dev);

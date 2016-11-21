@@ -218,7 +218,7 @@ inline void irtkSymmetricImageRegistration::SetInput(irtkGreyImage *target, irtk
 
 inline void irtkSymmetricImageRegistration::Debug(string message)
 {
-  if (_DebugFlag == true) cout << message << endl;
+  if (_DebugFlag != 0) cout << message << endl;
 }
 
 //#include <irtkSymmetricImageFreeFormRegistration.h>

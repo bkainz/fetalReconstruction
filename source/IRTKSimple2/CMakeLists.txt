@@ -1,12 +1,32 @@
-cmake_minimum_required(VERSION 2.8)
+cmake_minimum_required(VERSION 2.6)
 if(COMMAND cmake_policy)
   # policy settings ...
   cmake_policy(SET CMP0003 NEW)
+  if( POLICY CMP0038)
+    cmake_policy(SET CMP0038 OLD)
+  endif()
 endif(COMMAND cmake_policy)
 
-PROJECT(IRTK)
+#PROJECT(IRTK)
 
 #INCLUDE(CTest)
+
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/common++/include
+	${CMAKE_CURRENT_SOURCE_DIR}/contrib++/include
+	${CMAKE_CURRENT_SOURCE_DIR}/geometry++/include
+	${CMAKE_CURRENT_SOURCE_DIR}/image++/include
+	${CMAKE_CURRENT_SOURCE_DIR}/packages/transformation/include
+	${CMAKE_CURRENT_SOURCE_DIR}/packages/registration/include
+	${CMAKE_CURRENT_SOURCE_DIR}/nifti/niftilib
+	${CMAKE_CURRENT_SOURCE_DIR}/nifti/zlib
+	${CMAKE_CURRENT_SOURCE_DIR}/nifti/znzlib
+	)
+
+IF (BUILD_WITH_NIFTI)
+   add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/nifti)
+   include_directories(${CMAKE_CURRENT_BINARY_DIR}/nifti/zlib) #for up-to-date zlib.h
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/nifti/zlib)
+ENDIF (BUILD_WITH_NIFTI)
 
 # Finding GNU scientific library GSL
 FIND_PACKAGE(GSL REQUIRED)
@@ -43,26 +63,22 @@ OPTION(BUILD_WITH_TBB "Use TBB library for multithreading support" ON)
 #SUBDIRS(common++/src geometry++/src image++/src contrib++/src applications packages wrapping)
 SUBDIRS(common++/src geometry++/src image++/src contrib++/src packages)
 
-INCLUDE(${IRTK_SOURCE_DIR}/config/IRTKInclude.cmake)
+INCLUDE(${CMAKE_CURRENT_SOURCE_DIR}/config/IRTKInclude.cmake)
 
 SET(EXECUTABLE_OUTPUT_PATH ${IRTK_BINARY_DIR}/bin CACHE STRING
   "Where to put the executables")
 SET(LIBRARY_OUTPUT_PATH ${IRTK_BINARY_DIR}/lib CACHE STRING
   "Where to put the libraries")
 
-IF (BUILD_WITH_NIFTI)
-   SUBDIRS(nifti)
-ENDIF (BUILD_WITH_NIFTI)
+CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/config/IRTKInclude.cmake
+               ${CMAKE_CURRENT_BINARY_DIR}/lib/IRTKInclude.cmake)	
 
-include_directories(${CMAKE_CURRENT_BINARY_DIR}/nifti/zlib)
-
-
-CONFIGURE_FILE(${IRTK_SOURCE_DIR}/config/IRTKInclude.cmake
-               ${IRTK_BINARY_DIR}/lib/IRTKInclude.cmake)	
-
-#CONFIGURE_FILE(${IRTK_SOURCE_DIR}/InstallerScripts/irtkInstaller.sh
-#               ${IRTK_BINARY_DIR}/bin/irtkInstaller.sh)
+#CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/InstallerScripts/irtkInstaller.sh
+#               ${CMAKE_CURRENT_BINARY_DIR}/bin/irtkInstaller.sh)
                
-#EXEC_PROGRAM(chmod ${IRTK_BINARY_DIR}/bin ARGS +x;irtkInstaller.sh)
+#EXEC_PROGRAM(chmod ${CMAKE_CURRENT_BINARY_DIR}/bin ARGS +x;irtkInstaller.sh)
 
-INCLUDE(${IRTK_SOURCE_DIR}/config/IRTKGenerateConfigFile.cmake)
+INCLUDE(${CMAKE_CURRENT_SOURCE_DIR}/config/IRTKGenerateConfigFile.cmake)
+#INCLUDE(${CMAKE_CURRENT_BINARY_DIR}/IRTKConfig.cmake)
+
+set(IRTK_LIBRARIES common++ contrib++ geometry++ image++ registration++ transformation++ ${ZLIB_LIBRARY} znz niftiio)

@@ -1,52 +1,29 @@
 /*=========================================================================
-Library   : Image Registration Toolkit (IRTK)
-Copyright : Imperial College, Department of Computing
-Visual Information Processing (VIP), 2011 onwards
-Date      : $Date: 2013-11-15 14:36:30 +0100 (Fri, 15 Nov 2013) $
-Version   : $Revision: 1 $
-Changes   : $Author: bkainz $
-
-Copyright (c) 2014, Bernhard Kainz, Markus Steinberger,
-Maria Murgasova, Kevin Keraudren
-All rights reserved.
-
-If you use this work for research we would very much appreciate if you cite
-Bernhard Kainz, Markus Steinberger, Wolfgang Wein, Maria Kuklisova-Murgasova, 
-Christina Malamateniou, Kevin Keraudren, Thomas Torsney-Weir, Mary Rutherford, 
-Paul Aljabar, Joseph V. Hajnal, and Daniel Rueckert: Fast Volume Reconstruction 
-from Motion Corrupted Stacks of 2D Slices. IEEE Transactions on Medical Imaging, 
-in print, 2015. doi:10.1109/TMI.2015.2415453 
-
-IRTK IS PROVIDED UNDER THE TERMS OF THIS CREATIVE
-COMMONS PUBLIC LICENSE ("CCPL" OR "LICENSE"). THE WORK IS PROTECTED BY
-COPYRIGHT AND/OR OTHER APPLICABLE LAW. ANY USE OF THE WORK OTHER THAN
-AS AUTHORIZED UNDER THIS LICENSE OR COPYRIGHT LAW IS PROHIBITED.
-
-BY EXERCISING ANY RIGHTS TO THE WORK PROVIDED HERE, YOU ACCEPT AND AGREE
-TO BE BOUND BY THE TERMS OF THIS LICENSE. TO THE EXTENT THIS LICENSE MAY BE
-CONSIDERED TO BE A CONTRACT, THE LICENSOR GRANTS YOU THE RIGHTS CONTAINED
-HERE IN CONSIDERATION OF YOUR ACCEPTANCE OF SUCH TERMS AND CONDITIONS.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-
-1. Redistributions of source code must retain the above copyright notice, this
-list of conditions and the following disclaimer.
-2. Redistributions in binary form must reproduce the above copyright notice,
-this list of conditions and the following disclaimer in the documentation
-and/or other materials provided with the distribution.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
-ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
-ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+* GPU accelerated motion compensation for MRI
+*
+* Copyright (c) 2016 Bernhard Kainz, Amir Alansary, Maria Kuklisova-Murgasova,
+* Kevin Keraudren, Markus Steinberger
+* (b.kainz@imperial.ac.uk)
+*
+* Permission is hereby granted, free of charge, to any person obtaining a copy
+* of this software and associated documentation files (the "Software"), to deal
+* in the Software without restriction, including without limitation the rights
+* to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+* copies of the Software, and to permit persons to whom the Software is
+* furnished to do so, subject to the following conditions:
+*
+* The above copyright notice and this permission notice shall be included in
+* all copies or substantial portions of the Software.
+*
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+* AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+* LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+* FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+* IN THE SOFTWARE.
 =========================================================================*/
+
 #include <irtkImage.h>
 #include <irtkTransformation.h>
 #include <irtkReconstructionGPU.h>
@@ -59,8 +36,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <time.h>  
 //#include <irtkEvaluation.h>
 #include <boost/program_options.hpp>
-
 namespace po = boost::program_options;
+
+// include SLIC files
+#include <runSLIC_2D.c> 
 
 #if HAVE_CULA
 #include "stackMotionEstimator.h"
@@ -77,6 +56,16 @@ const std::string currentDateTime() {
 
   return buf;
 }
+
+
+//TODO
+//exclude patches at an early stage for registration
+//define patches only virtually and rewrite all kernels so that they only take the patch informatio instead of storing redundat overlapping patches
+//apply this in 4D to cardiac images
+//learn a dictionary from the patches and learn? registration (for cardiac maybe more advisable)
+//integrate SLIC algorithm for patch generation
+//integrate niftireg or other GPU based registration algos to be more flexibility
+
 
 int main(int argc, char **argv)
 {
@@ -129,7 +118,7 @@ int main(int argc, char **argv)
   bool useCPU = false;
   bool useCPUReg = true;
   bool useGPUReg = false;
-  bool disableBiasCorr = false;
+  bool disableBiasCorr = true;
   bool useAutoTemplate = false;
 
   irtkRealImage average;
@@ -150,8 +139,23 @@ int main(int argc, char **argv)
   unsigned int num_input_stacks_tuner = 0;
   string referenceVolumeName;
   unsigned int T1PackageSize = 0;
-  unsigned int numDevicesToUse = UINT_MAX;
-  bool useSINCPSF = false;
+  bool patchBased = false;
+
+  //--------------------------------------------------------------------------------------------
+  // superpixel (spx)
+  irtkRealImage sStack;
+  vector<irtkRealImage> sStacks;
+  float noSuperpixels;
+  bool superpixelBased = false;
+  //--------------------------------------------------------------------------------------------
+  
+  unsigned int patchSize = 64;
+  unsigned int patchStride = 32;
+  bool saveSliceTransformations = false;
+  bool useNMI = false;
+
+  //in case of manual mask transformation, it is required that the provided manual mask fits the first of the provided image stacks.
+  std::string manualMaskName;
 
   try
   {
@@ -189,13 +193,22 @@ int main(int argc, char **argv)
       ("sfolder", po::value< string >(&sfolder), "[folder] Use existing registered slices and replace loaded ones (have to be equally many as loaded from stacks).")
       ("referenceVolume", po::value<string>(&referenceVolumeName), "Name for an optional reference volume. Will be used as inital reconstruction.")
       ("T1PackageSize", po::value<unsigned int>(&T1PackageSize), "is a test if you can register T1 to T2 using NMI and only one iteration")
-      ("numDevicesToUse", po::value<unsigned int>(&numDevicesToUse), "sets how many GPU devices to use in case of automatic device selection. Default is as many as available.")
       ("useCPU", po::bool_switch(&useCPU)->default_value(false), "use CPU for reconstruction and registration; performs superresolution and robust statistics on CPU. Default is using the GPU")
       ("useCPUReg", po::bool_switch(&useCPUReg)->default_value(true), "use CPU for more flexible CPU registration; performs superresolution and robust statistics on GPU. [default, best result]")
       ("useGPUReg", po::bool_switch(&useGPUReg)->default_value(false), "use faster but less accurate and flexible GPU registration; performs superresolution and robust statistics on GPU.")
       ("useAutoTemplate", po::bool_switch(&useAutoTemplate)->default_value(false), "select 3D registration template stack automatically with matrix rank method.")
-      ("useSINCPSF", po::bool_switch(&useSINCPSF)->default_value(false), "use a more MRI like SINC point spread function (PSF) Will be in plane sinc (Bartlett) and through plane Gaussian.")
-      ("disableBiasCorrection", po::bool_switch(&disableBiasCorr)->default_value(false), "disable bias field correction for cases with little or no bias field inhomogenities (makes it faster but less reliable for stron intensity bias)");
+      ("patchSize", po::value< unsigned int >(&patchSize)->default_value(64), "defines the size of the 2D patches for patchBased reconstruction")
+      ("patchStride", po::value< unsigned int >(&patchStride)->default_value(32), "defines the stride of the 2D patches for patchBased reconstruction")
+      ("disableBiasCorrection", po::bool_switch(&disableBiasCorr)->default_value(true), "disable bias field correction for cases with little or no bias field inhomogenities (makes it faster but less reliable for stron intensity bias)")
+      ("patchBased", po::bool_switch(&patchBased)->default_value(false), "activate experimentl patch-based reconstruction.")
+      //--------------------------------------------------------------------------------------------
+      // superpixel (spx)
+      ("superpixelBased", po::bool_switch(&superpixelBased)->default_value(false), "activate experimentl superpixel-based reconstruction.")
+      ("superpixel,s", po::value< float >(&noSuperpixels)->multitoken(), "[noLabels] Number of superpixels")
+      //--------------------------------------------------------------------------------------------
+      ("manualMask", po::value<string>(&manualMaskName), "Binary manual accurate mask to define a region accuratly slice by slice. It is required that the provided manual mask fits the *first* of the provided image stacks in -i <stacks *1*...N>! Nifti or Analyze format.")
+      ("useNMI", po::bool_switch(&useNMI)->default_value(false), "use Normalized Mutual Information for slice to volume registration.")
+      ("saveSliceTransformations", po::bool_switch(&saveSliceTransformations)->default_value(false), "Save slice transformations and pixel to voxel mapping. Be aware that the index refers to the stacks cropped with the provided mask (not the original stack slice index).");
     po::variables_map vm;
 
     try
@@ -225,18 +238,12 @@ int main(int argc, char **argv)
     return EXIT_FAILURE;
   }
 
-
   if (useCPU)
   {
-    //security measure for wrong input params
     useCPUReg = true;
     useGPUReg = false;
   }
-  else
-  {
-    cudaDeviceReset();
-  }
- 
+
   if (useGPUReg) useCPUReg = false;
 
   cout << "Reconstructed volume name ... " << outputName << endl;
@@ -247,31 +254,91 @@ int main(int argc, char **argv)
   if (!referenceVolumeName.empty())
   {
     referenceVolume.Read(referenceVolumeName.c_str());
-    cout << "using " << referenceVolumeName << " as initial reference volueme for " << outputName << endl;
+    cout << "using " << referenceVolumeName << " as initial reference volume for " << outputName << endl;
   }
 
+  bool needManualMaskTransform = false;
+  irtkRealImage manualMask;
+  if(!manualMaskName.empty())
+  {
+    manualMask.Read(manualMaskName.c_str());
+    needManualMaskTransform = true;
+  }
+  
+  vector<double> thicknessN;
+  vector<int> packagesN;  
 
   float tmp_motionestimate = FLT_MAX;
   for (i = 0; i < nStacks; i++)
   {
     stack.Read(inputStacks[i].c_str());
     cout << "Reading stack ... " << inputStacks[i] << endl;
-    stacks.push_back(stack);
+    //stacks.push_back(stack);
+
+	//separate 4D volumes
+	if (stack.GetT() > 1)
+	{
+		irtkImageAttributes attr = stack.GetImageAttributes();
+		attr._t = 1;
+		for (int t = 0; t < stack.GetT(); t++)
+		{
+			cout << "Splitting stack ... " << inputStacks[i] << endl;
+			irtkRealImage stackn(attr);
+			memcpy(stackn.GetPointerToVoxels(), stack.GetPointerToVoxels() + t*stack.GetX()*stack.GetY()*stack.GetZ(),
+				stack.GetX()*stack.GetY()*stack.GetZ() * sizeof(double));
+			stacks.push_back(stackn);
+			if (!thickness.empty())
+				thicknessN.push_back(thickness[i]);
+			if (!packages.empty())
+				packagesN.push_back(packages[i]);
+		}
+	}
+	else
+	{
+		stacks.push_back(stack);
+		if (!thickness.empty())
+			thicknessN.push_back(thickness[i]);
+		if (!packages.empty())
+			packagesN.push_back(packages[i]);
+	}
+
+	if (!thickness.empty())
+		thickness = thicknessN;
+	if (!packages.empty())
+		packages = packagesN;
+    //--------------------------------------------------------------------------------------------
+    // superpixel (spx)
+    if (superpixelBased)
+    {
+      float noLabels = noSuperpixels;
+      double c = 1; // compactness factor -- control the superpixel shape
+      runSLIC_2D(noLabels, c, stack, sStacks);
+    }
+    //--------------------------------------------------------------------------------------------
   }
+
+  for (int i = 0; i < stacks.size(); i++)
+  {
+	  //irtkReconstruction::Rescale(stacks[i], 4096.0);
+	  sprintf(buffer, "stack%i.nii", i);
+	  stacks[i].Write(buffer);
+  }
+
+  nStacks = stacks.size();
 
   for (i = 0; i < nStacks; i++)
   {
     irtkTransformation *transformation;
     if (!inputTransformations.empty())
     {
-      try
+      if(inputTransformations[i] == std::string("id"))
+      {
+        if (templateNumber < 0) templateNumber = i;
+        transformation = new irtkRigidTransformation;
+      }
+      else
       {
         transformation = irtkTransformation::New((char*)(inputTransformations[i].c_str()));
-      }
-      catch (...)
-      {
-        transformation = new irtkRigidTransformation;
-        if (templateNumber < 0) templateNumber = 0;
       }
     }
     else
@@ -285,9 +352,9 @@ int main(int argc, char **argv)
     delete rigidTransf;
   }
 
-
   if (!useCPU)
   {
+    cudaDeviceReset();
     //default use all devices > CP 3.0 that are available
     int nDevices;
     cudaGetDeviceCount(&nDevices);
@@ -298,27 +365,12 @@ int main(int argc, char **argv)
     }
     if (devicesToUse.empty())
     {
-
       for (int i = 0; i < nDevices; i++) {
         cudaDeviceProp prop;
         cudaGetDeviceProperties(&prop, i);
         if (prop.major >= 3)
         {
-          try
-          {
-            cudaError_t status = cudaSetDevice(i);
-            if (status == cudaSuccess)
-            {
-              if (devicesToUse.size() < numDevicesToUse)
-              {
-                devicesToUse.push_back(i);
-              }
-            }
-          }
-          catch (...)
-          {
-            cout << "skipping device " << i << '\n';
-          }
+          devicesToUse.push_back(i);
         }
       }
     }
@@ -331,13 +383,17 @@ int main(int argc, char **argv)
 
   //Create reconstruction object
   // !useCPUReg = no multithreaded GPU, only multi-GPU
-  irtkReconstruction reconstruction(devicesToUse, useCPUReg, useCPU); // to emulate error for multi-threaded GPU
+  irtkReconstruction reconstruction(devicesToUse, useCPUReg); // to emulate error for multi-threaded GPU
 
-  if (useSINCPSF)
-  {
-    reconstruction.useSINCPSF();
+  reconstruction.setPatchBased(patchBased, useCPU);
+  if (disableBiasCorr){
+    reconstruction.disableBiasCorrection();
   }
 
+  //--------------------------------------------------------------------------------------------
+  // superpixel (spx)
+  reconstruction.setSuperpixelBased(superpixelBased, useCPU);
+  //--------------------------------------------------------------------------------------------
   reconstruction.Set_debugGPU(debug_gpu);
 
   reconstruction.InvertStackTransformations(stack_transformations);
@@ -404,8 +460,25 @@ int main(int argc, char **argv)
   //If no mask was given  try to create mask from the template image in case it was padded
   if ((mask == NULL) && (sfolder.empty()))
   {
+    //TODO calculate overlap area. Make mask from that
     mask = new irtkRealImage(stacks[templateNumber]);
-    *mask = reconstruction.CreateMask(*mask);
+    if (patchBased)
+    {
+      *mask = reconstruction.CreateMaskFromOverlap(stacks);
+    }
+    //--------------------------------------------------------------------------------------------
+    // superpixel (spx)
+    else if (superpixelBased)
+    {
+      *mask = reconstruction.CreateMaskFromOverlap(stacks);
+    }
+    //--------------------------------------------------------------------------------------------
+    else
+    {
+      *mask = reconstruction.CreateMask(*mask);
+    }
+
+    mask->Write("generatedMask.nii.gz");
   }
 
   //copy to tmp stacks for template determination
@@ -517,10 +590,16 @@ int main(int argc, char **argv)
   }
 #endif
 
+  //  return EXIT_SUCCESS;
+
     //now do it really with best stack
     reconstruction.TransformMask(stacks[templateNumber], m, stack_transformations[templateNumber]);
     //Crop template stack
     reconstruction.CropImage(stacks[templateNumber], m);
+    if (superpixelBased)
+    {
+      reconstruction.CropImage(sStacks[templateNumber], m);
+    }
 
     if (debug)
     {
@@ -529,6 +608,7 @@ int main(int argc, char **argv)
     }
 }
 
+  //mask->Write("generatedMask_t.nii.gz");
   tmpStacks.erase(tmpStacks.begin(), tmpStacks.end());
 
   std::vector<uint3> stack_sizes;
@@ -546,6 +626,7 @@ int main(int argc, char **argv)
   //Set mask to reconstruction object. 
   reconstruction.SetMask(mask, smooth_mask);
 
+  //reconstruction.GetMask().Write("generatedMask_s.nii");
   //to redirect output from screen to text files
 
   //to remember cout and cerr buffer
@@ -604,6 +685,10 @@ int main(int argc, char **argv)
     reconstruction.TransformMask(stacks[i], m, stack_transformations[i]);
     //Crop template stack
     reconstruction.CropImage(stacks[i], m);
+    if (!sStacks.empty())
+    {
+      reconstruction.CropImage(sStacks[i], m);
+    }
     if (debug)
     {
       sprintf(buffer, "mask%i.nii.gz", i);
@@ -645,7 +730,21 @@ int main(int argc, char **argv)
 
   //Create slices and slice-dependent transformations
   //resolution = reconstruction.CreateTemplate(stacks[templateNumber],resolution);
-  reconstruction.CreateSlicesAndTransformations(stacks, stack_transformations, thickness);
+  if(patchBased)
+  {
+    reconstruction.CreateSlicesAndTransformationsPatchBased(patchSize, patchStride, stacks, stack_transformations, thickness);
+  }
+  //--------------------------------------------------------------------------------------------
+  // superpixel (spx)
+  else if (superpixelBased)
+  {
+    reconstruction.CreateSlicesAndTransformationsSuperpixelBased(sStacks, stacks, stack_transformations, thickness);
+  }
+  //--------------------------------------------------------------------------------------------
+  else
+  {
+    reconstruction.CreateSlicesAndTransformations(stacks, stack_transformations, thickness);
+  }
 
   if (!sfolder.empty())
   {
@@ -724,7 +823,7 @@ int main(int argc, char **argv)
     cout << "Iteration " << iter << ". " << endl;
 
     //perform slice-to-volume registrations - skip the first iteration 
-    if (iter > 0)
+	if (iter > 0 || !referenceVolumeName.empty())
     {
       if (!no_log) {
         cerr.rdbuf(file_e.rdbuf());
@@ -860,7 +959,7 @@ int main(int argc, char **argv)
     }
     else {
       reconstruction.GaussianReconstructionGPU();
-      if (debug || debug_gpu)
+      if (true /*debug || debug_gpu*/)
       {
         reconstructedGPU = reconstruction.GetReconstructedGPU();
         sprintf(buffer, "GaussianReconstruction_GPU%i.nii", iter);
@@ -869,7 +968,7 @@ int main(int argc, char **argv)
     }
     stats.sample("GaussianReconstruction");
 
-    //return EXIT_SUCCESS;
+   // return EXIT_SUCCESS;
     //Simulate slices (needs to be done after Gaussian reconstruction)
     if (useCPU)
     {
@@ -986,6 +1085,7 @@ int main(int argc, char **argv)
         reconstruction.SimulateSlices();
       }
       else {
+	      //printf("2nd simulate slices");
         reconstruction.SimulateSlicesGPU();
       }
       stats.sample("SimulateSlices");
@@ -1010,7 +1110,6 @@ int main(int argc, char **argv)
       //Save intermediate reconstructed image
       if (debug || debug_gpu)
       {
-
         if (useCPU)
         {
           reconstructed = reconstruction.GetReconstructed();
@@ -1026,6 +1125,8 @@ int main(int argc, char **argv)
       printf("%d ", i);
     }//end of reconstruction iterations
 
+    printf("Main loop end\n");
+
     //Mask reconstructed image to ROI given by the mask
     if (useCPU)
     {
@@ -1033,24 +1134,65 @@ int main(int argc, char **argv)
     }
     else {
       reconstruction.MaskVolumeGPU();
-
     }
     stats.sample("MaskVolume");
+
+    printf("Masking done\n");
+
+    if (patchBased)
+    {
+      if (!useCPU)
+      {
+        printf("writing volWeights\n");
+        irtkGenericImage<float> volweights = reconstruction.getVolWeights();
+        sprintf(buffer, "volWeights%i_GPU.nii", iter);
+        volweights.Write(buffer);
+        printf("writing weights\n");
+        irtkGenericImage<float> weights = reconstruction.getWeights();
+        sprintf(buffer, "weights%i_GPU.nii", iter);
+        weights.Write(buffer);
+      }
+      else
+      {
+        reconstruction.SaveWeights();
+      }
+    }
+    //--------------------------------------------------------------------------------------------
+    // superpixel (spx)
+    else if (superpixelBased)
+    {
+      if (!useCPU)
+      {
+        printf("writing volWeights\n");
+        irtkGenericImage<float> volweights = reconstruction.getVolWeights();
+        sprintf(buffer, "volWeights%i_GPU.nii", iter);
+        volweights.Write(buffer);
+        printf("writing weights\n");
+        irtkGenericImage<float> weights = reconstruction.getWeights();
+        sprintf(buffer, "weights%i_GPU.nii", iter);
+        weights.Write(buffer);
+      }
+      else
+      {
+        reconstruction.SaveWeights();
+      }
+    }
 
     //Save reconstructed image
     if (useCPU)
     {
       reconstructed = reconstruction.GetReconstructed();
-      sprintf(buffer, "image%i_CPU.nii", iter);
+      sprintf(buffer, "image%i_CPU.nii.gz", iter);
       reconstructed.Write(buffer);
     }
     else {
       reconstruction.SyncCPU();
       stats.sample("SyncCPU");
       reconstructed = reconstruction.GetReconstructed();
-      sprintf(buffer, "image%i_GPU.nii", iter);
+      sprintf(buffer, "image%i_GPU.nii.gz", iter);
       reconstructed.Write(buffer);
       //get quality gradient
+      //TODO implement patch-based quality metric
       /*if (iter > 0)
       {
       irtkEvaluation eval(reconstructed, lastReconstructed);
@@ -1066,7 +1208,12 @@ int main(int argc, char **argv)
       //compare difference to first recon
       lastReconstructed = reconstructed;
       }*/
+    }
 
+    if (saveSliceTransformations)
+    {
+      reconstruction.SaveSlices();
+      reconstruction.SaveTransformations();
     }
 
     //Evaluate - write number of included/excluded/outside/zero slices in each iteration in the file
@@ -1088,6 +1235,19 @@ int main(int argc, char **argv)
     }
     printf("\n");
   }// end of interleaved registration-reconstruction iterations
+
+  //--------------------------------------------------------------------------------------------
+  //addition for manualMask transform (Tong's lung atlas)
+  if(needManualMaskTransform)
+  {
+    //need to crop the mask to same size as first stack -- like fill slices...
+    reconstruction.CropImage(manualMask,*mask);
+    irtkGenericImage<float>* transformedManualMask = new irtkGenericImage<float>;
+    transformedManualMask->Initialize(reconstruction.GetReconstructed().GetImageAttributes());
+    reconstruction.transformManualMaskwithPSF(manualMask, transformedManualMask);
+    manualMaskName.insert(manualMaskName.find_last_of("/")+1,"PSFTransformed_");
+    transformedManualMask->Write(manualMaskName.c_str());
+  }
 
   //reconstruction.SyncCPU();
   if (useCPU)

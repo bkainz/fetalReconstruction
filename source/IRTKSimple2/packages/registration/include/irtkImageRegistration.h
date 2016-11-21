@@ -225,7 +225,7 @@ inline void irtkImageRegistration::SetInput(irtkGreyImage *target, irtkGreyImage
 
 inline void irtkImageRegistration::Debug(string message)
 {
-  if (_DebugFlag == true) cout << message << endl;
+  if (_DebugFlag != 0) cout << message << endl;
 }
 
 #include <irtkImageRigidRegistration.h>

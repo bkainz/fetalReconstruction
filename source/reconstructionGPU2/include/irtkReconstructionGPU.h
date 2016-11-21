@@ -1,51 +1,27 @@
 /*=========================================================================
-Library   : Image Registration Toolkit (IRTK)
-Copyright : Imperial College, Department of Computing
-Visual Information Processing (VIP), 2011 onwards
-Date      : $Date: 2013-11-15 14:36:30 +0100 (Fri, 15 Nov 2013) $
-Version   : $Revision: 1 $
-Changes   : $Author: bkainz $
-
-Copyright (c) 2014, Bernhard Kainz, Markus Steinberger,
-Maria Murgasova, Kevin Keraudren
-All rights reserved.
-
-If you use this work for research we would very much appreciate if you cite
-Bernhard Kainz, Markus Steinberger, Wolfgang Wein, Maria Kuklisova-Murgasova, 
-Christina Malamateniou, Kevin Keraudren, Thomas Torsney-Weir, Mary Rutherford, 
-Paul Aljabar, Joseph V. Hajnal, and Daniel Rueckert: Fast Volume Reconstruction 
-from Motion Corrupted Stacks of 2D Slices. IEEE Transactions on Medical Imaging, 
-in print, 2015. doi:10.1109/TMI.2015.2415453 
-
-IRTK IS PROVIDED UNDER THE TERMS OF THIS CREATIVE
-COMMONS PUBLIC LICENSE ("CCPL" OR "LICENSE"). THE WORK IS PROTECTED BY
-COPYRIGHT AND/OR OTHER APPLICABLE LAW. ANY USE OF THE WORK OTHER THAN
-AS AUTHORIZED UNDER THIS LICENSE OR COPYRIGHT LAW IS PROHIBITED.
-
-BY EXERCISING ANY RIGHTS TO THE WORK PROVIDED HERE, YOU ACCEPT AND AGREE
-TO BE BOUND BY THE TERMS OF THIS LICENSE. TO THE EXTENT THIS LICENSE MAY BE
-CONSIDERED TO BE A CONTRACT, THE LICENSOR GRANTS YOU THE RIGHTS CONTAINED
-HERE IN CONSIDERATION OF YOUR ACCEPTANCE OF SUCH TERMS AND CONDITIONS.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-
-1. Redistributions of source code must retain the above copyright notice, this
-list of conditions and the following disclaimer.
-2. Redistributions in binary form must reproduce the above copyright notice,
-this list of conditions and the following disclaimer in the documentation
-and/or other materials provided with the distribution.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
-ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
-ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+* GPU accelerated motion compensation for MRI
+*
+* Copyright (c) 2016 Bernhard Kainz, Amir Alansary, Maria Kuklisova-Murgasova,
+* Kevin Keraudren, Markus Steinberger
+* (b.kainz@imperial.ac.uk)
+*
+* Permission is hereby granted, free of charge, to any person obtaining a copy
+* of this software and associated documentation files (the "Software"), to deal
+* in the Software without restriction, including without limitation the rights
+* to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+* copies of the Software, and to permit persons to whom the Software is
+* furnished to do so, subject to the following conditions:
+*
+* The above copyright notice and this permission notice shall be included in
+* all copies or substantial portions of the Software.
+*
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+* AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+* LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+* FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+* IN THE SOFTWARE.
 =========================================================================*/
 
 
@@ -169,13 +145,12 @@ protected:
 
   ///Quality factor - higher means slower and better
   double _quality_factor;
-
-  //use sinc like function or not
-  bool _use_SINC;
-
   ///Intensity min and max
   double _max_intensity;
   double _min_intensity;
+
+  //disable bias correction
+  bool _disableBiasC;
 
   //Gradient descent and regulatization parameters
   ///Step for gradient descent
@@ -224,13 +199,21 @@ protected:
   Reconstruction* reconstructionGPU;
 
   bool _useCPUReg;
-  bool _useCPU;
   bool _debugGPU;
+  bool _patchBased;
+  bool _useNMI;
+
+  //--------------------------------------------------------------------------------------------
+  // superpixel (spx)
+  bool _superpixelBased;
+  //--------------------------------------------------------------------------------------------
+ 
+   uint3 reqVDims;
 
 public:
 
   ///Constructor
-  irtkReconstruction(std::vector<int> dev, bool useCPUReg, bool useCPU = false);
+  irtkReconstruction(std::vector<int> dev, bool useCPUReg);
   ///Destructor
   ~irtkReconstruction();
 
@@ -241,6 +224,7 @@ public:
   ///If template image has been masked instead of creating the mask in separate
   ///file, this function can be used to create mask from the template image
   irtkRealImage CreateMask(irtkRealImage image);
+  irtkRealImage CreateMaskFromOverlap(std::vector<irtkRealImage>& stacks);
 
   ///Remember volumetric mask and smooth it if necessary
   void SetMask(irtkRealImage * mask, double sigma, double threshold = 0.5);
@@ -267,7 +251,7 @@ public:
     irtkRigidTransformation& transformation);
 
   /// Rescale image ignoring negative values
-  void Rescale(irtkRealImage &img, double max);
+  static void Rescale(irtkRealImage &img, double max);
 
   ///Calculate initial registrations
   void StackRegistrations(vector<irtkRealImage>& stacks,
@@ -276,6 +260,17 @@ public:
 
   ///Create slices from the stacks and slice-dependent transformations from
   ///stack transformations
+  void CreateSlicesAndTransformationsPatchBased(int patchSize, int stride, vector<irtkRealImage>& stacks,
+    vector<irtkRigidTransformation>& stack_transformations,
+    vector<double>& thickness,
+    const vector<irtkRealImage> &probability_maps = vector<irtkRealImage>());
+  //--------------------------------------------------------------------------------------------
+  // superpixel (spx)
+  void CreateSlicesAndTransformationsSuperpixelBased(vector<irtkRealImage>& sStacks, vector<irtkRealImage>& stacks,
+    vector<irtkRigidTransformation>& stack_transformations,
+    vector<double>& thickness,
+    const vector<irtkRealImage> &probability_maps = vector<irtkRealImage>());
+  //--------------------------------------------------------------------------------------------
   void CreateSlicesAndTransformations(vector<irtkRealImage>& stacks,
     vector<irtkRigidTransformation>& stack_transformations,
     vector<double>& thickness,
@@ -380,6 +375,9 @@ public:
   ///Remember stdev for bias field
   inline void SetSigma(double sigma);
 
+  //disable bias correction
+  void disableBiasCorrection();
+
   ///Return reconstructed volume
   inline irtkRealImage GetReconstructed();
   void SetReconstructed(irtkRealImage &reconstructed);
@@ -389,9 +387,6 @@ public:
 
   ///Set smoothing parameters
   inline void SetSmoothingParameters(double delta, double lambda);
-
-  ///use in-plane sinc like PSF
-  inline void useSINCPSF();
 
   ///Use faster lower quality reconstruction
   inline void SpeedupOn();
@@ -418,6 +413,8 @@ public:
   ///Do not save intermediate results
   inline void DebugOff();
 
+  inline void setUseNMI();
+
   inline void UseAdaptiveRegularisation();
 
   ///Write included/excluded/outside slices
@@ -429,6 +426,10 @@ public:
 
   /// Read and replace Slices
   void replaceSlices(string folder);
+
+  /// transforms a manual slice-by-slice stack 
+  /// segmetnation into reconstruction space
+  void transformManualMaskwithPSF(irtkRealImage manualMask, irtkGenericImage<float>* transformedManualMask);
 
   //To recover original scaling
   ///Restore slice intensities to their original values
@@ -472,6 +473,16 @@ public:
   ///sync GPU with data
   //TODO distribute in documented functions above
   irtkRealImage externalRegistrationTargetImage;
+
+  //performs patch based evaluation
+  void setPatchBased(bool value, bool _cpu);
+  //--------------------------------------------------------------------------------------------
+  // superpixel (spx)
+  //performs superpixel based evaluation
+  void setSuperpixelBased(bool value, bool _cpu);
+  //--------------------------------------------------------------------------------------------
+  irtkGenericImage<float> getWeights();
+  irtkGenericImage<float> getVolWeights();
 
   void SyncGPU();
   Matrix4 toMatrix4(irtkMatrix mat);
@@ -541,6 +552,12 @@ inline void irtkReconstruction::DebugOn()
   cout << "Debug mode." << endl;
 }
 
+inline void irtkReconstruction::setUseNMI()
+{
+  _useNMI = true;
+  cout << "Going to use NMI for slice to volume registration!" << endl;
+}
+
 inline void irtkReconstruction::UseAdaptiveRegularisation()
 {
   _adaptive = true;
@@ -555,12 +572,6 @@ inline void irtkReconstruction::SetSigma(double sigma)
 {
   _sigma_bias = sigma;
 }
-
-inline void irtkReconstruction::useSINCPSF()
-{
-  _use_SINC = true;
-}
-
 
 inline void irtkReconstruction::SpeedupOn()
 {

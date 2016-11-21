@@ -47,7 +47,9 @@ See LICENSE for details
 // Windows is missing M_PI constants
 #define M_PI		3.14159265358979323846
 
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 
 // Windows specific header file
 #include <windows.h>

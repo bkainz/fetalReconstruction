@@ -52,7 +52,7 @@ public:
   /// Guess parameters
   virtual void GuessParameter();
   /// Guess parameters for slice to volume registration 
-  virtual void GuessParameterSliceToVolume();
+  virtual void GuessParameterSliceToVolume(bool useNMI = false);
   /// Guess parameters volumes with thick slices
   virtual void GuessParameterThickSlices();
     /// Guess parameters volumes with thick slices and NMI

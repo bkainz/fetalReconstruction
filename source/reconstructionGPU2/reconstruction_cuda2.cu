@@ -1,51 +1,27 @@
 /*=========================================================================
-Library   : Image Registration Toolkit (IRTK)
-Copyright : Imperial College, Department of Computing
-Visual Information Processing (VIP), 2011 onwards
-Date      : $Date: 2013-11-15 14:36:30 +0100 (Fri, 15 Nov 2013) $
-Version   : $Revision: 1 $
-Changes   : $Author: bkainz $
-
-Copyright (c) 2014, Bernhard Kainz, Markus Steinberger,
-Maria Murgasova, Kevin Keraudren
-All rights reserved.
-
-If you use this work for research we would very much appreciate if you cite
-Bernhard Kainz, Markus Steinberger, Wolfgang Wein, Maria Kuklisova-Murgasova, 
-Christina Malamateniou, Kevin Keraudren, Thomas Torsney-Weir, Mary Rutherford, 
-Paul Aljabar, Joseph V. Hajnal, and Daniel Rueckert: Fast Volume Reconstruction 
-from Motion Corrupted Stacks of 2D Slices. IEEE Transactions on Medical Imaging, 
-in print, 2015. doi:10.1109/TMI.2015.2415453 
-
-IRTK IS PROVIDED UNDER THE TERMS OF THIS CREATIVE
-COMMONS PUBLIC LICENSE ("CCPL" OR "LICENSE"). THE WORK IS PROTECTED BY
-COPYRIGHT AND/OR OTHER APPLICABLE LAW. ANY USE OF THE WORK OTHER THAN
-AS AUTHORIZED UNDER THIS LICENSE OR COPYRIGHT LAW IS PROHIBITED.
-
-BY EXERCISING ANY RIGHTS TO THE WORK PROVIDED HERE, YOU ACCEPT AND AGREE
-TO BE BOUND BY THE TERMS OF THIS LICENSE. TO THE EXTENT THIS LICENSE MAY BE
-CONSIDERED TO BE A CONTRACT, THE LICENSOR GRANTS YOU THE RIGHTS CONTAINED
-HERE IN CONSIDERATION OF YOUR ACCEPTANCE OF SUCH TERMS AND CONDITIONS.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-
-1. Redistributions of source code must retain the above copyright notice, this
-list of conditions and the following disclaimer.
-2. Redistributions in binary form must reproduce the above copyright notice,
-this list of conditions and the following disclaimer in the documentation
-and/or other materials provided with the distribution.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
-ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
-ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+* GPU accelerated motion compensation for MRI
+*
+* Copyright (c) 2016 Bernhard Kainz, Amir Alansary, Maria Kuklisova-Murgasova,
+* Kevin Keraudren, Markus Steinberger
+* (b.kainz@imperial.ac.uk)
+*
+* Permission is hereby granted, free of charge, to any person obtaining a copy
+* of this software and associated documentation files (the "Software"), to deal
+* in the Software without restriction, including without limitation the rights
+* to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+* copies of the Software, and to permit persons to whom the Software is
+* furnished to do so, subject to the following conditions:
+*
+* The above copyright notice and this permission notice shall be included in
+* all copies or substantial portions of the Software.
+*
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+* AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+* LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+* FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+* IN THE SOFTWARE.
 =========================================================================*/
 
 #include "reconstruction_cuda2.cuh"
@@ -55,6 +31,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <thrust/inner_product.h>
 #include <stdint.h>
 #include <algorithm>
+#include <float.h>
+#include <limits>
+//#include "patchBasedVolume.cuh"
 
 using namespace thrust;
 
@@ -67,7 +46,6 @@ __constant__ uint3 d_PSFsize;
 __constant__ Matrix4 d_PSFI2W;
 __constant__ Matrix4 d_PSFW2I;
 __constant__ float d_quality_factor;
-__constant__ float d_use_SINC; //constant flag because of efficency reasons
 
 texture<float, 3, cudaReadModeElementType> psfTex;
 texture<float, 3, cudaReadModeElementType > reconstructedTex_;
@@ -113,6 +91,7 @@ __device__ float round_(float x)
   return roundf(x);
 }
 
+#if CUDART_VERSION < 8000
 __device__ double atomicAdd(double* address, double val)
 {
   unsigned long long int* address_as_ull =
@@ -126,7 +105,7 @@ __device__ double atomicAdd(double* address, double val)
   } while (assumed != old);
   return __longlong_as_double(old);
 }
-
+#endif
 
 ///////////////////////////////test continous PSF kernels
 //in slice coords
@@ -135,25 +114,22 @@ __device__ float inline calcPSF(float3 sPos, float3 dim)
   const float sigmaz = dim.z / 2.3548f;
 
 #if 1
+#if !USE_SINC_PSF
+  const float sigmax = 1.2f * dim.x / 2.3548f;
+  const float sigmay = 1.2f * dim.y / 2.3548f;
 
-  if(d_use_SINC)
-  {
-    // sinc is already 1.2 FWHM
-    sPos.x = sPos.x * dim.x / 2.3548f;
-    sPos.y = sPos.y * dim.y / 2.3548f;
-    float x = sqrt(sPos.x*sPos.x + sPos.y*sPos.y);
-    float R = 3.14159265359f * x;
-    float si = sin(R) / (R);
-    return  si*si * exp((-sPos.z * sPos.z) / (2.0f * sigmaz * sigmaz)); //Bartlett positive sinc
-  }
-  else
-  {
-    const float sigmax = 1.2f * dim.x / 2.3548f;
-    const float sigmay = 1.2f * dim.y / 2.3548f;
+  return exp((-sPos.x * sPos.x) / (2.0f * sigmax * sigmax) - (sPos.y * sPos.y) / (2.0f * sigmay * sigmay)
+    - (sPos.z * sPos.z) / (2.0f * sigmaz * sigmaz));
+#else
+  // sinc is already 1.2 FWHM
+  sPos.x = sPos.x * dim.x / 2.3548f;
+  sPos.y = sPos.y * dim.y / 2.3548f;
+  float x = sqrt(sPos.x*sPos.x + sPos.y*sPos.y);
+  float R = 3.14159265359f * x;
+  float si = sin(R) / (R);
+  return  si*si * exp((-sPos.z * sPos.z) / (2.0f * sigmaz * sigmaz)); //Bartlett positive sinc
 
-    return exp((-sPos.x * sPos.x) / (2.0f * sigmax * sigmax) - (sPos.y * sPos.y) / (2.0f * sigmay * sigmay)
-      - (sPos.z * sPos.z) / (2.0f * sigmaz * sigmaz));
-  }
+#endif
 
 #else
   float val = exp(-sPos.x * sPos.x / (2.0f * sigmax * sigmax) - sPos.y * sPos.y / (2.0f * sigmay * sigmay)
@@ -202,7 +178,8 @@ __global__ void gaussianReconstructionKernel3D_tex(int numSlices, float* __restr
   Volume<float> reconstructed_volWeigths, Volume<int> sliceVoxel_count,
   Volume<float> v_PSF_sums, float* __restrict mask, uint2 vSize,
   Matrix4* __restrict sliceI2W, Matrix4*  __restrict sliceW2I, Matrix4* __restrict slicesTransformation,
-  Matrix4* __restrict slicesInvTransformation, const float3* __restrict d_slicedim, const int* __restrict d_dims, float reconVSize, short step, short slicesPerRun)
+  Matrix4* __restrict slicesInvTransformation, const float3* __restrict d_slicedim, const int* __restrict d_dims, float reconVSize, 
+  short step, short slicesPerRun, bool disableBiasCorrection)
 {
 
   const uint3 pos = make_uint3(blockIdx.x* blockDim.x + threadIdx.x,
@@ -210,7 +187,7 @@ __global__ void gaussianReconstructionKernel3D_tex(int numSlices, float* __restr
     blockIdx.z* blockDim.z + threadIdx.z + step);
 
   //z is slice index
-  if (pos.z >= numSlices || (pos.z - step) >= slicesPerRun)
+  if (pos.z >= numSlices || (pos.z - step) >= slicesPerRun || pos.z < 0)
     return;
 
   unsigned int idx = pos.x + pos.y*vSize.x + pos.z*vSize.x*vSize.y;
@@ -220,7 +197,10 @@ __global__ void gaussianReconstructionKernel3D_tex(int numSlices, float* __restr
 
   float3 sliceDim = d_slicedim[pos.z];
 
-  s = s * exp(-bias2D[idx]) * scales[pos.z];
+  if (disableBiasCorrection)
+    s = s * scales[pos.z];
+  else
+    s = s * exp(-bias2D[idx]) * scales[pos.z];
 
   float3 slicePos = make_float3(pos.x, pos.y, 0);
 
@@ -288,7 +268,7 @@ __global__ void gaussianReconstructionKernel3D_tex(int numSlices, float* __restr
       {
         float3 ofsPos;
         float psfval = getPSFParamsPrecomp(ofsPos, psfxyz, make_int3(x - centre, y - centre, z - centre), combInvTrans, slicePos, sliceDim);
-        if (abs(oldPSF - psfval) < PSF_EPSILON) continue;
+        if (abs(oldPSF-psfval) < PSF_EPSILON) continue;
         oldPSF = psfval;
 
         uint3 apos = make_uint3(round_(ofsPos.x), round_(ofsPos.y), round_(ofsPos.z)); //NN
@@ -378,7 +358,7 @@ __global__ void simulateSlicesKernel3D_tex(int numSlices,
           weight += psfval;
 
           slice_inside = 1;
-}
+        }
       }
     }
   }
@@ -429,7 +409,7 @@ __global__ void SuperresolutionKernel3D_tex(unsigned short numSlices, float* __r
   float* __restrict simslices, float* __restrict slice_weights, float* __restrict scales, float* __restrict mask,
   float* __restrict v_PSF_sums, Volume<float> addon, float* confidence_map, Matrix4* __restrict sliceI2W, Matrix4* __restrict sliceW2I,
   Matrix4* slicesTransformation, Matrix4* slicesInvTransformation, float3* __restrict d_slicedim, float reconVSize,
-  unsigned short step, int slicesPerRun, ushort2 sliceSize, float size)
+  unsigned short step, int slicesPerRun, ushort2 sliceSize, float size, bool disableBiasCorrection)
 {
 
   const uint3 pos = make_uint3(blockIdx.x* blockDim.x + threadIdx.x,
@@ -449,13 +429,18 @@ __global__ void SuperresolutionKernel3D_tex(unsigned short numSlices, float* __r
   if ((sume == 0.0))
     return;
 
-  float b = bias[idx];
+
   float w = weights[idx];
   float ss = simslices[idx];
   float slice_weight = slice_weights[pos.z];
   float scale = scales[pos.z];
 
-  float sliceVal = s * exp(-b) * scale;
+  float sliceVal = 0;
+  if (!disableBiasCorrection)
+    sliceVal = s * exp(-bias[idx]) * scale;
+  else
+    sliceVal = s * scale;
+
   if (ss > 0.0f)
     sliceVal = (sliceVal - ss);
   else
@@ -498,7 +483,7 @@ __global__ void SuperresolutionKernel3D_tex(unsigned short numSlices, float* __r
             psfval * w * slice_weight * sliceVal);
           atomicAdd(&(confidence_map[apos.x + apos.y*addon.size.x + apos.z*addon.size.x*addon.size.y]),
             psfval * w * slice_weight);
-}
+        }
       }
     }
   }
@@ -564,7 +549,7 @@ __global__ void normalizeBiasKernel3D_tex(int numSlices, Volume<float> slices, V
   if (scale > 0)
   {
     nbias -= log(scale);
-}
+  }
 
   float3 sliceDim = d_slicedim[pos.z];
 
@@ -621,7 +606,6 @@ __global__ void normalizeBiasKernel3D_tex(int numSlices, Volume<float> slices, V
 
 }
 
-
 ///////////////////////////////test area PSF texture end
 
 void threadStartCaller(int i, Reconstruction& reconstruction)
@@ -633,8 +617,12 @@ Reconstruction::Reconstruction(std::vector<int> dev, bool multiThreadedGPU) : mu
 {
   devicesToUse = dev;
 
+  checkCudaErrors(cudaDeviceSynchronize());
+
   _useCPUReg = false;
   _debugGPU = false;
+  _patchBased = false;
+  _disableBiasC = false;
 
   for (int d = 0; d < devicesToUse.size(); d++)
   {
@@ -649,11 +637,11 @@ Reconstruction::Reconstruction(std::vector<int> dev, bool multiThreadedGPU) : mu
     int can_access_peer;
     cudaDeviceCanAccessPeer(&can_access_peer, 0, dev);
     printf("peer access GPU 0 to %d \n", can_access_peer);
-    if (can_access_peer == 1)
+    if (can_access_peer == 1 && devicesToUse.size() > 1)
     {
       printf("enabeling peer access GPU 0 to %d \n", dev);
-      checkCudaErrors(cudaSetDevice(0));
-      checkCudaErrors(cudaDeviceEnablePeerAccess(dev, 0));
+      checkCudaErrors(cudaSetDevice(devicesToUse[0]));
+      checkCudaErrors(cudaDeviceEnablePeerAccess(dev, devicesToUse[0]));
     }
   }
 
@@ -673,7 +661,7 @@ Reconstruction::Reconstruction(std::vector<int> dev, bool multiThreadedGPU) : mu
     GPU_sync.startup<Reconstruction>(devicesToUse.size(), threadStartCaller, *this);
   }
 
-  checkCudaErrors(cudaSetDevice(0));
+  checkCudaErrors(cudaSetDevice(devicesToUse[0]));
 
   int h_directions[][3] = {
       { 1, 0, -1 },
@@ -728,7 +716,7 @@ void Reconstruction::startThread(int i)
 
 
 void Reconstruction::generatePSFVolume(float* CPUPSF, uint3 PSFsize_, float3 sliceVoxelDim,
-  float3 PSFdim, Matrix4 PSFI2W, Matrix4 PSFW2I, float _quality_factor, bool _use_SINC)
+  float3 PSFdim, Matrix4 PSFI2W, Matrix4 PSFW2I, float _quality_factor)
 {
   std::cout << "generating PSF Volume..." << std::endl;
   PSFsize = PSFsize_;
@@ -737,7 +725,7 @@ void Reconstruction::generatePSFVolume(float* CPUPSF, uint3 PSFsize_, float3 sli
   if (multiThreadedGPU)
   {
     for (int d = 0; d < devicesToUse.size(); d++)
-      GPU_workers[d]->prepareGeneratePSFVolume(CPUPSF, PSFsize_, sliceVoxelDim, PSFdim, PSFI2W, PSFW2I, _quality_factor, _use_SINC);
+      GPU_workers[d]->prepareGeneratePSFVolume(CPUPSF, PSFsize_, sliceVoxelDim, PSFdim, PSFI2W, PSFW2I, _quality_factor);
     GPU_sync.runNextRound();
   }
   else
@@ -745,13 +733,13 @@ void Reconstruction::generatePSFVolume(float* CPUPSF, uint3 PSFsize_, float3 sli
     for (int d = 0; d < devicesToUse.size(); d++)
     {
       int dev = devicesToUse[d];
-      generatePSFVolumeOnX(CPUPSF, PSFsize_, sliceVoxelDim, PSFdim, PSFI2W, PSFW2I, _quality_factor, _use_SINC, dev);
+      generatePSFVolumeOnX(CPUPSF, PSFsize_, sliceVoxelDim, PSFdim, PSFI2W, PSFW2I, _quality_factor, dev);
     }
   }
 }
 
 void Reconstruction::generatePSFVolumeOnX(float* CPUPSF, uint3 PSFsize_, float3 sliceVoxelDim,
-  float3 PSFdim, Matrix4 PSFI2W, Matrix4 PSFW2I, float _quality_factor, bool _use_SINC, int dev)
+  float3 PSFdim, Matrix4 PSFI2W, Matrix4 PSFW2I, float _quality_factor, int dev)
 {
   checkCudaErrors(cudaSetDevice(dev));
   checkCudaErrors(cudaMemcpyToSymbol(d_PSFdim, &(PSFdim), sizeof(float3)));
@@ -759,11 +747,6 @@ void Reconstruction::generatePSFVolumeOnX(float* CPUPSF, uint3 PSFsize_, float3 
   checkCudaErrors(cudaMemcpyToSymbol(d_PSFI2W, &(PSFI2W), sizeof(Matrix4)));
   checkCudaErrors(cudaMemcpyToSymbol(d_PSFW2I, &(PSFW2I), sizeof(Matrix4)));
   checkCudaErrors(cudaMemcpyToSymbol(d_quality_factor, &(_quality_factor), sizeof(float)));
-  checkCudaErrors(cudaMemcpyToSymbol(d_use_SINC, &(_use_SINC), sizeof(bool)));
-  if (_use_SINC && _debugGPU)
-  {
-    printf("using sinc like PSF.");
-  }
 }
 
 template <typename T>
@@ -792,7 +775,7 @@ void Reconstruction::setSliceDims(std::vector<float3> slice_dims, float _quality
   std::vector<int> _sliceDim;
   for (int i = 0; i < slice_dims.size(); ++i)
   {
-    float size = dev_reconstructed_[0].dim.x / _quality_factor;
+    float size = dev_reconstructed_[devicesToUse[0]].dim.x / _quality_factor;
     int xDim = 2.0f * slice_dims[i].x / size + 0.5f;
     int yDim = 2.0f * slice_dims[i].y / size + 0.5f;
     int zDim = 2.0f * slice_dims[i].z / size + 0.5f;
@@ -826,7 +809,7 @@ void Reconstruction::setSliceDims(std::vector<float3> slice_dims, float _quality
   }
 
 
-  checkCudaErrors(cudaSetDevice(0));
+  checkCudaErrors(cudaSetDevice(devicesToUse[0]));
 }
 
 void Reconstruction::setSliceDimsOnX(std::vector<float3>& slice_dims, std::vector<int>& sliceDim, bool allocate, int dev)
@@ -881,7 +864,7 @@ void Reconstruction::SetSliceMatrices(std::vector<Matrix4> matSliceTransforms, s
   }
 
 
-  checkCudaErrors(cudaSetDevice(0));
+  checkCudaErrors(cudaSetDevice(devicesToUse[0]));
 }
 
 void Reconstruction::SetSliceMatricesOnX(std::vector<Matrix4> matSliceTransforms, std::vector<Matrix4> matInvSliceTransforms,
@@ -1127,7 +1110,7 @@ void Reconstruction::setMask(uint3 s, float3 dim, float* data, float sigma_bias)
       setMaskOnX(s, dim, data, sigma_bias, dev);
     }
   }
-  checkCudaErrors(cudaSetDevice(0));
+  checkCudaErrors(cudaSetDevice(devicesToUse[0]));
 }
 
 
@@ -1180,7 +1163,10 @@ void Reconstruction::InitReconstructionVolume(uint3 s, float3 dim, float *data, 
   int storagesize = 1 + *std::max_element(devicesToUse.begin(), devicesToUse.end());
 
   dev_reconstructed_.resize(storagesize);
-  dev_bias_.resize(storagesize);
+  if (!_disableBiasC)
+  {
+    dev_bias_.resize(storagesize);
+  }
   dev_reconstructed_volWeigths.resize(storagesize);
   dev_addon_.resize(storagesize);
   dev_confidence_map_.resize(storagesize);
@@ -1200,7 +1186,7 @@ void Reconstruction::InitReconstructionVolume(uint3 s, float3 dim, float *data, 
       InitReconstructionVolumeOnX(s, dim, data, sigma_bias, dev);
     }
   }
-  checkCudaErrors(cudaSetDevice(0));
+  checkCudaErrors(cudaSetDevice(devicesToUse[0]));
 }
 
 void Reconstruction::InitReconstructionVolumeOnX(uint3 s, float3 dim, float *data, float sigma_bias, int dev)
@@ -1214,10 +1200,13 @@ void Reconstruction::InitReconstructionVolumeOnX(uint3 s, float3 dim, float *dat
   if (data != NULL) checkCudaErrors(cudaMemcpy(l_reconstructed_.data, data, s.x*s.y*s.z*sizeof(float), cudaMemcpyHostToDevice));
   dev_reconstructed_[dev] = (l_reconstructed_);
 
-  Volume<float> l_bias_;
-  l_bias_.init(s, dim);
-  cudaMemset(l_bias_.data, 0, N*sizeof(float));
-  dev_bias_[dev] = (l_bias_);
+  if (!_disableBiasC)
+  {
+    Volume<float> l_bias_;
+    l_bias_.init(s, dim);
+    cudaMemset(l_bias_.data, 0, N*sizeof(float));
+    dev_bias_[dev] = (l_bias_);
+  }
 
   Volume<float> l_volume_weights_;
   l_volume_weights_.init(s, dim);
@@ -1288,7 +1277,10 @@ void Reconstruction::cleanUpOnX(int dev)
   checkCudaErrors(cudaSetDevice(dev));
 
   dev_reconstructed_[dev].release();
-  dev_bias_[dev].release();
+  if (!_disableBiasC)
+  {
+    dev_bias_[dev].release();
+  }
   dev_reconstructed_volWeigths[dev].release();
   dev_addon_[dev].release();
   dev_confidence_map_[dev].release();
@@ -1296,7 +1288,10 @@ void Reconstruction::cleanUpOnX(int dev)
 
   dev_sliceVoxel_count_[dev].release();
   dev_v_slices[dev].release();
-  dev_v_bias[dev].release();
+  if (!_disableBiasC)
+  {
+    dev_v_bias[dev].release();
+  }
   dev_v_weights[dev].release();
   dev_v_simulated_weights[dev].release();
   dev_v_simulated_slices[dev].release();
@@ -1420,10 +1415,12 @@ void Reconstruction::initStorageVolumes(uint3 size, float3 dim)
   unsigned int step = floor(num_slices_ / (float)devicesToUse.size());
 
   int storagesize = 1 + *std::max_element(devicesToUse.begin(), devicesToUse.end());
-
   slices_per_device.resize(storagesize);
   dev_v_slices.resize(storagesize);
-  dev_v_bias.resize(storagesize);
+  //if (!_disableBiasC)
+  {
+    dev_v_bias.resize(storagesize);
+  }
   dev_v_weights.resize(storagesize);
   dev_v_simulated_weights.resize(storagesize);
   dev_v_simulated_slices.resize(storagesize);
@@ -1459,7 +1456,7 @@ void Reconstruction::initStorageVolumes(uint3 size, float3 dim)
     }
   }
 
-  checkCudaErrors(cudaSetDevice(0));
+  checkCudaErrors(cudaSetDevice(devicesToUse[0]));
 
   v_slices.init(size, dim);
 
@@ -1510,9 +1507,12 @@ void Reconstruction::initStorageVolumesOnX(uint3 size, float3 dim, int start, in
   l_slices.init(dsize, dim);
   dev_v_slices[dev] = (l_slices);
 
-  Volume<float> l_bias;
-  l_bias.init(dsize, dim);
-  dev_v_bias[dev] = (l_bias);
+  if (!_disableBiasC)
+  {
+    Volume<float> l_bias;
+    l_bias.init(dsize, dim);
+    dev_v_bias[dev] = (l_bias);
+  }
 
   Volume<float> l_weights;
   l_weights.init(dsize, dim);
@@ -1553,7 +1553,10 @@ void Reconstruction::initStorageVolumesOnX(uint3 size, float3 dim, int start, in
   unsigned int N = dsize.x*dsize.y*dsize.z;
 
   cudaMemset(dev_v_slices[dev].data, 0, N*sizeof(float));
-  cudaMemset(dev_v_bias[dev].data, 0, N*sizeof(float));
+  if (!_disableBiasC)
+  {
+    cudaMemset(dev_v_bias[dev].data, 0, N*sizeof(float));
+  }
   cudaMemset(dev_v_weights[dev].data, 0, N*sizeof(float));
   cudaMemset(dev_v_simulated_weights[dev].data, 0, N*sizeof(float));
   cudaMemset(dev_v_simulated_slices[dev].data, 0, N*sizeof(float));
@@ -1617,7 +1620,7 @@ void Reconstruction::FillSlices(float* sdata, std::vector<int> sizesX, std::vect
   }
 
 
-  checkCudaErrors(cudaSetDevice(0));
+  checkCudaErrors(cudaSetDevice(devicesToUse[0]));
 }
 
 void Reconstruction::FillSlicesOnX(float* sdata, std::vector<int>& sizesX, std::vector<int>& sizesY, float* d_ldata, float* ldata, int dev, bool alloc)
@@ -1654,7 +1657,7 @@ void Reconstruction::FillSlicesOnX(float* sdata, std::vector<int>& sizesX, std::
 
 void Reconstruction::UpdateReconstructed(const uint3 vsize, float* data)
 {
-  cudaMemcpy(dev_reconstructed_[0].data, data, vsize.x*vsize.y*vsize.z*sizeof(float), cudaMemcpyHostToDevice);
+  cudaMemcpy(dev_reconstructed_[devicesToUse[0]].data, data, vsize.x*vsize.y*vsize.z*sizeof(float), cudaMemcpyHostToDevice);
 
   //update other GPUs
   for (int d = 1; d < devicesToUse.size(); d++)
@@ -1665,9 +1668,9 @@ void Reconstruction::UpdateReconstructed(const uint3 vsize, float* data)
 }
 void Reconstruction::UpdateReconstructedOnX(const uint3 vsize, float* data, int dev)
 {
-  unsigned int N = dev_reconstructed_[0].size.x*dev_reconstructed_[0].size.y*dev_reconstructed_[0].size.z;
+  unsigned int N = dev_reconstructed_[devicesToUse[0]].size.x*dev_reconstructed_[devicesToUse[0]].size.y*dev_reconstructed_[devicesToUse[0]].size.z;
   checkCudaErrors(cudaSetDevice(dev));
-  checkCudaErrors(cudaMemcpy(dev_reconstructed_[dev].data, dev_reconstructed_[0].data,
+  checkCudaErrors(cudaMemcpy(dev_reconstructed_[dev].data, dev_reconstructed_[devicesToUse[0]].data,
     N*sizeof(float), cudaMemcpyDefault));
 }
 
@@ -1849,7 +1852,7 @@ void Reconstruction::CorrectBias(float sigma_bias, bool _global_bias_correction)
       CorrectBiasOnX(sigma_bias, _global_bias_correction, d_lbiasdata, dev);
     }
   }
-  checkCudaErrors(cudaSetDevice(0));
+  checkCudaErrors(cudaSetDevice(devicesToUse[0]));
 }
 
 
@@ -2025,15 +2028,15 @@ __global__ void	calcBiasFieldKernel(Volume<float> reconstructed, Volume<float> r
 void Reconstruction::syncCPU(float* reconstructed)
 {
   cudaDeviceSynchronize();
-  checkCudaErrors(cudaSetDevice(0));
-  cudaMemcpy(reconstructed, dev_reconstructed_[0].data, dev_reconstructed_[0].size.x*dev_reconstructed_[0].size.y*dev_reconstructed_[0].size.z*sizeof(float), cudaMemcpyDeviceToHost);
+  checkCudaErrors(cudaSetDevice(devicesToUse[0]));
+  cudaMemcpy(reconstructed, dev_reconstructed_[devicesToUse[0]].data, dev_reconstructed_[devicesToUse[0]].size.x*dev_reconstructed_[devicesToUse[0]].size.y*dev_reconstructed_[devicesToUse[0]].size.z*sizeof(float), cudaMemcpyDeviceToHost);
   cudaDeviceSynchronize();
 }
 
 void Reconstruction::SyncConfidenceMapAddon(float* cmdata, float* addondata)
 {
-  cudaMemcpy(cmdata, dev_confidence_map_[0].data, dev_confidence_map_[0].size.x*dev_confidence_map_[0].size.y*dev_confidence_map_[0].size.z*sizeof(float), cudaMemcpyDeviceToHost);
-  cudaMemcpy(addondata, dev_addon_[0].data, dev_addon_[0].size.x*dev_addon_[0].size.y*dev_addon_[0].size.z*sizeof(float), cudaMemcpyDeviceToHost);
+  cudaMemcpy(cmdata, dev_confidence_map_[devicesToUse[0]].data, dev_confidence_map_[devicesToUse[0]].size.x*dev_confidence_map_[devicesToUse[0]].size.y*dev_confidence_map_[devicesToUse[0]].size.z*sizeof(float), cudaMemcpyDeviceToHost);
+  cudaMemcpy(addondata, dev_addon_[devicesToUse[0]].data, dev_addon_[devicesToUse[0]].size.x*dev_addon_[devicesToUse[0]].size.y*dev_addon_[devicesToUse[0]].size.z*sizeof(float), cudaMemcpyDeviceToHost);
 }
 
 //original without prep
@@ -2087,8 +2090,8 @@ __global__ void AdaptiveRegularizationKernel(Volume<float> reconstructed, Volume
       )
     {
       float bi = AdaptiveRegularization1(i, pos3, pos2, original, confidence_map, delta);
-      val += bi * reconstructed[pos2] * confidence_map[pos2];
-      valW += bi * confidence_map[pos2];
+      val += bi * reconstructed[pos3] * confidence_map[pos3];
+      valW += bi * confidence_map[pos3];
       sum += bi;
     }
 
@@ -2120,19 +2123,19 @@ void Reconstruction::Superresolution(int iter, std::vector<float> _slice_weight,
     printf("Warning: regularization might not have smoothing effect! Ensure that alpha*lambda/delta^2 is below 0.068.");
   }
 
-  checkCudaErrors(cudaSetDevice(0));
+  checkCudaErrors(cudaSetDevice(devicesToUse[0]));
 
-  unsigned int N = dev_addon_[0].size.x*dev_addon_[0].size.y*dev_addon_[0].size.z;
+  unsigned int N = dev_addon_[devicesToUse[0]].size.x*dev_addon_[devicesToUse[0]].size.y*dev_addon_[devicesToUse[0]].size.z;
 
   Volume<float> dev_addon_accbuf_;
-  dev_addon_accbuf_.init(dev_reconstructed_[0].size, dev_reconstructed_[0].dim);
+  dev_addon_accbuf_.init(dev_reconstructed_[devicesToUse[0]].size, dev_reconstructed_[devicesToUse[0]].dim);
   Volume<float> dev_cmap_accbuf_;
-  dev_cmap_accbuf_.init(dev_reconstructed_[0].size, dev_reconstructed_[0].dim);
+  dev_cmap_accbuf_.init(dev_reconstructed_[devicesToUse[0]].size, dev_reconstructed_[devicesToUse[0]].dim);
 
   Volume<float> original;
-  original.init(dev_reconstructed_[0].size, dev_reconstructed_[0].dim);
-  checkCudaErrors(cudaMemcpy(original.data, dev_reconstructed_[0].data,
-    dev_reconstructed_[0].size.x*dev_reconstructed_[0].size.y*dev_reconstructed_[0].size.z*sizeof(float), cudaMemcpyDeviceToDevice));
+  original.init(dev_reconstructed_[devicesToUse[0]].size, dev_reconstructed_[devicesToUse[0]].dim);
+  checkCudaErrors(cudaMemcpy(original.data, dev_reconstructed_[devicesToUse[0]].data,
+    dev_reconstructed_[devicesToUse[0]].size.x*dev_reconstructed_[devicesToUse[0]].size.y*dev_reconstructed_[devicesToUse[0]].size.z*sizeof(float), cudaMemcpyDeviceToDevice));
 
   if (multiThreadedGPU)
   {
@@ -2148,24 +2151,28 @@ void Reconstruction::Superresolution(int iter, std::vector<float> _slice_weight,
       SuperresolutionOnX1(N, dev_addon_accbuf_, dev_cmap_accbuf_, original, dev);
     }
   }
+  CHECK_ERROR(SuperresolutionOnX1);
 
   //TODO try to improve with MRF instead of anisotropic diffusion -- get enhanced segmentation
 
+
   //TODO multi-GPU regularization -- distribute addon and cmap to GPUs, integrate and regularize multiGPU?
-  checkCudaErrors(cudaSetDevice(0));
-  dim3 blockSize = dim3(8, 8, 10);
-  dim3 gridSize = divup(dim3(dev_addon_[0].size.x, dev_addon_[0].size.y, dev_addon_[0].size.z), blockSize);
+  checkCudaErrors(cudaSetDevice(devicesToUse[0]));
+  dim3 blockSize = dim3(8, 8, 8);
+  dim3 gridSize = divup(dim3(dev_addon_[devicesToUse[0]].size.x, dev_addon_[devicesToUse[0]].size.y, dev_addon_[devicesToUse[0]].size.z), blockSize);
 
-  AdaptiveRegularizationPrep << <gridSize, blockSize, 0, streams[0] >> >(_adaptive, alpha, dev_reconstructed_[0],
-    dev_addon_[0], dev_confidence_map_[0], _min_intensity, _max_intensity, 0, dev_reconstructed_[0].size.z);
+  AdaptiveRegularizationPrep << <gridSize, blockSize, 0, streams[devicesToUse[0]] >> >(_adaptive, alpha, dev_reconstructed_[devicesToUse[0]],
+    dev_addon_[devicesToUse[0]], dev_confidence_map_[devicesToUse[0]], _min_intensity, _max_intensity, 0, dev_reconstructed_[devicesToUse[0]].size.z);
+  CHECK_ERROR(AdaptiveRegularizationPrep);
 
-  AdaptiveRegularizationKernel << <gridSize, blockSize, 0, streams[0] >> >(dev_reconstructed_[0], original, dev_confidence_map_[0],
-    delta, alpha, lambda, 0, dev_reconstructed_[0].size.z);
+  AdaptiveRegularizationKernel << <gridSize, blockSize, 0, streams[devicesToUse[0]] >> >(dev_reconstructed_[devicesToUse[0]], original, dev_confidence_map_[devicesToUse[0]],
+    delta, alpha, lambda, 0, dev_reconstructed_[devicesToUse[0]].size.z);
+  CHECK_ERROR(AdaptiveRegularizationKernel);
 
   for (int d = 1; d < devicesToUse.size(); d++)
   {
     int dev = devicesToUse[d];
-    checkCudaErrors(cudaMemcpy(dev_reconstructed_[dev].data, dev_reconstructed_[0].data,
+    checkCudaErrors(cudaMemcpy(dev_reconstructed_[dev].data, dev_reconstructed_[devicesToUse[0]].data,
       N*sizeof(float), cudaMemcpyDefault));
   }
 
@@ -2204,7 +2211,7 @@ void Reconstruction::SuperresolutionOnX1(int N, Volume<float>& dev_addon_accbuf_
       dev_v_simulated_slices[dev].data, dev_d_slice_weights[dev], dev_d_scales[dev], dev_mask_[dev].data, dev_v_PSF_sums_[dev].data,
       dev_addon_[dev], dev_confidence_map_[dev].data,
       dev_d_slicesI2W[dev], dev_d_slicesW2I[dev], dev_d_slicesTransformation[dev], dev_d_slicesInvTransformation[dev], dev_d_sliceDims[dev],
-      reconstructedVoxelSize, i*MAX_SLICES_PER_RUN, thisrun, make_ushort2(dev_v_slices[dev].size.x, dev_v_slices[dev].size.y), psfsize);
+      reconstructedVoxelSize, i*MAX_SLICES_PER_RUN, thisrun, make_ushort2(dev_v_slices[dev].size.x, dev_v_slices[dev].size.y), psfsize, _disableBiasC);
 
     rest -= MAX_SLICES_PER_RUN;
   }
@@ -2212,18 +2219,18 @@ void Reconstruction::SuperresolutionOnX1(int N, Volume<float>& dev_addon_accbuf_
   CHECK_ERROR(SuperresolutionKernel3D_tex);
 
   //copy addon back to gpu 0
-  if (dev > 0)
+  if (dev > 0 && devicesToUse.size() > 1)
   {
-    checkCudaErrors(cudaSetDevice(0));
+    checkCudaErrors(cudaSetDevice(devicesToUse[0]));
     checkCudaErrors(cudaMemcpyAsync(dev_addon_accbuf_.data, dev_addon_[dev].data,
       N*sizeof(float), cudaMemcpyDefault));
-    thrust::device_ptr<float> ptr_addon(dev_addon_[0].data);
+    thrust::device_ptr<float> ptr_addon(dev_addon_[devicesToUse[0]].data);
     thrust::device_ptr<float> ptr_dev_addon(dev_addon_accbuf_.data);
     thrust::transform(ptr_addon, ptr_addon + N, ptr_dev_addon, ptr_addon, plus<float>());
 
     checkCudaErrors(cudaMemcpyAsync(dev_cmap_accbuf_.data, dev_confidence_map_[dev].data,
       N*sizeof(float), cudaMemcpyDefault));
-    thrust::device_ptr<float> ptr_cmap(dev_confidence_map_[0].data);
+    thrust::device_ptr<float> ptr_cmap(dev_confidence_map_[devicesToUse[0]].data);
     thrust::device_ptr<float> ptr_dev_cmap(dev_cmap_accbuf_.data);
     thrust::transform(ptr_cmap, ptr_cmap + N, ptr_dev_cmap, ptr_cmap, plus<float>());
   }
@@ -2283,9 +2290,10 @@ void Reconstruction::InitializeRobustStatistics(float& _sigma)
 
     unsigned int N = dev_v_slices[dev].size.x*dev_v_slices[dev].size.y*dev_v_slices[dev].size.z;
 
-    thrust::tuple<float, unsigned int> out = transform_reduce(make_zip_iterator(make_tuple(d_s, d_si, d_ss, d_sw)),
-      make_zip_iterator(make_tuple(d_s + N, d_si + N, d_ss + N, d_sw + N)), transformRS(),
-      make_tuple(0.0, 0), reduceRS()); //+
+    thrust::tuple<float, unsigned int> out = transform_reduce(
+      make_zip_iterator(make_tuple<thrust::device_ptr<float>,thrust::device_ptr<char>,thrust::device_ptr<float>,thrust::device_ptr<float> >(d_s, d_si, d_ss, d_sw)),
+      make_zip_iterator(make_tuple<thrust::device_ptr<float>,thrust::device_ptr<char>,thrust::device_ptr<float>,thrust::device_ptr<float> >(d_s + N, d_si + N, d_ss + N, d_sw + N)), 
+      transformRS(), make_tuple<float, unsigned int>(0.0, 0), reduceRS()); //+
 
     sa += get<0>(out);
     sb += (float)get<1>(out);
@@ -2293,19 +2301,37 @@ void Reconstruction::InitializeRobustStatistics(float& _sigma)
   }
   _sigma = sa / sb;
 
-  checkCudaErrors(cudaSetDevice(0));
+  checkCudaErrors(cudaSetDevice(devicesToUse[0]));
 }
 
+
+
+template <typename T>
+__global__ void equalizeVol(T* recon, T* volWeights, uint3 m_size)
+{
+	const uint3 pos = make_uint3(blockIdx.x * blockDim.x + threadIdx.x,
+		blockIdx.y * blockDim.y + threadIdx.y,
+		blockIdx.z * blockDim.z + threadIdx.z);
+
+	if (pos.x >= m_size.x || pos.y >= m_size.y || pos.z >= m_size.z)
+		return;
+
+	unsigned int idx = pos.x + pos.y*m_size.x + pos.z * m_size.x*m_size.y;
+	T a = recon[idx];
+	T b = volWeights[idx];
+
+	recon[idx] = (b != 0) ? a / b : a;
+}
 
 void Reconstruction::GaussianReconstruction(std::vector<int>& voxel_num)
 {
   voxel_num.resize(devicesToUse.size(), 0);
 
-  unsigned int N = dev_reconstructed_[0].size.x*dev_reconstructed_[0].size.y*dev_reconstructed_[0].size.z;
-  checkCudaErrors(cudaSetDevice(0));
+  unsigned int N = dev_reconstructed_[devicesToUse[0]].size.x*dev_reconstructed_[devicesToUse[0]].size.y*dev_reconstructed_[devicesToUse[0]].size.z;
+  checkCudaErrors(cudaSetDevice(devicesToUse[0]));
 
   Volume<float> dev_reconstructed_accbuf_;
-  dev_reconstructed_accbuf_.init(dev_reconstructed_[0].size, dev_reconstructed_[0].dim);
+  dev_reconstructed_accbuf_.init(dev_reconstructed_[devicesToUse[0]].size, dev_reconstructed_[devicesToUse[0]].dim);
 
   if (multiThreadedGPU)
   {
@@ -2321,18 +2347,25 @@ void Reconstruction::GaussianReconstruction(std::vector<int>& voxel_num)
       GaussianReconstructionOnX1(voxel_num[d], dev_reconstructed_accbuf_, dev);
     }
   }
+  CHECK_ERROR(GaussianReconstructionOnX1);
+  checkCudaErrors(cudaSetDevice(devicesToUse[0]));
 
-  checkCudaErrors(cudaSetDevice(0));
+  //might need a distribution -- will get obsolete since planned to do slice based recon in patch module
+  dim3 blockSize = dim3(8, 8, 8);
+  dim3 gridSize = divup(dim3(dev_reconstructed_[devicesToUse[0]].size.x, dev_reconstructed_[devicesToUse[0]].size.y, dev_reconstructed_[devicesToUse[0]].size.z), blockSize);
+  equalizeVol<float> << <gridSize, blockSize >> > (dev_reconstructed_[devicesToUse[0]].data, dev_reconstructed_volWeigths[devicesToUse[0]].data, dev_reconstructed_[devicesToUse[0]].size);
+  CHECK_ERROR(GaussianReconstruction_equalizeVol<T>);
 
-  thrust::device_ptr<float> ptr_recons(dev_reconstructed_[0].data);
-  thrust::device_ptr<float> ptr_count(dev_reconstructed_volWeigths[0].data);
-  thrust::transform(ptr_recons, ptr_recons + N, ptr_count, ptr_recons, divS<float>());
+  //thrust::transform seems to have a problem with cuda 7.5
+  //thrust::device_ptr<float> ptr_recons(dev_reconstructed_[devicesToUse[0]].data);
+  //thrust::device_ptr<float> ptr_count(dev_reconstructed_volWeigths[devicesToUse[0]].data);
+  //thrust::transform(ptr_recons, ptr_recons + N, ptr_count, ptr_recons, divS<float>());
 
   //update other GPUs
   for (int d = 1; d < devicesToUse.size(); d++)
   {
     int dev = devicesToUse[d];
-    checkCudaErrors(cudaMemcpy(dev_reconstructed_[dev].data, dev_reconstructed_[0].data,
+    checkCudaErrors(cudaMemcpy(dev_reconstructed_[dev].data, dev_reconstructed_[devicesToUse[0]].data,
       N*sizeof(float), cudaMemcpyDefault));
   }
 
@@ -2352,7 +2385,6 @@ void Reconstruction::GaussianReconstruction(std::vector<int>& voxel_num)
       GaussianReconstructionOnX2(voxel_num[d], dev);
     }
   }
-
   CHECK_ERROR(gaussianReconstructionKernel3Dcount);
 }
 
@@ -2361,7 +2393,7 @@ void Reconstruction::GaussianReconstructionOnX1(int& voxel_num, Volume<float>& d
   checkCudaErrors(cudaSetDevice(dev));
   int start = dev_slice_range_offset[dev].x;
   int end = dev_slice_range_offset[dev].y;
-  unsigned int N = dev_reconstructed_[0].size.x*dev_reconstructed_[0].size.y*dev_reconstructed_[0].size.z;
+  unsigned int N = dev_reconstructed_[devicesToUse[0]].size.x*dev_reconstructed_[devicesToUse[0]].size.y*dev_reconstructed_[devicesToUse[0]].size.z;
 
   unsigned int N2 = dev_v_weights[dev].size.x*dev_v_weights[dev].size.y*dev_v_weights[dev].size.z;
   cudaMemset(dev_v_weights[dev].data, 0, N2*sizeof(float));
@@ -2380,7 +2412,7 @@ void Reconstruction::GaussianReconstructionOnX1(int& voxel_num, Volume<float>& d
   {
     short thisrun = (rest >= MAX_SLICES_PER_RUN_GAUSS) ? MAX_SLICES_PER_RUN_GAUSS : rest;
 
-    dim3 blockSize3 = dim3(8, 8, 10);
+    dim3 blockSize3 = dim3(8, 8, 8);
     dim3 gridSize3 = divup(dim3(dev_v_slices[dev].size.x, dev_v_slices[dev].size.y, thisrun), blockSize3);
 
     checkCudaErrors(cudaDeviceSynchronize());
@@ -2390,7 +2422,7 @@ void Reconstruction::GaussianReconstructionOnX1(int& voxel_num, Volume<float>& d
       dev_sliceVoxel_count_[dev], dev_v_PSF_sums_[dev], dev_mask_[dev].data,
       make_uint2(dev_v_slices[dev].size.x, dev_v_slices[dev].size.y), dev_d_slicesI2W[dev], dev_d_slicesW2I[dev],
       dev_d_slicesTransformation[dev], dev_d_slicesInvTransformation[dev], dev_d_sliceDims[dev], dev_d_sliceDim[dev],
-      reconstructedVoxelSize, i*(MAX_SLICES_PER_RUN_GAUSS), thisrun);
+      reconstructedVoxelSize, i*(MAX_SLICES_PER_RUN_GAUSS), thisrun, _disableBiasC);
 
     checkCudaErrors(cudaDeviceSynchronize());
 
@@ -2407,19 +2439,19 @@ void Reconstruction::GaussianReconstructionOnX1(int& voxel_num, Volume<float>& d
     checkCudaErrors(cudaMemcpyAsync(v_PSF_sums_.data + ofs, dev_v_PSF_sums_[dev].data,
       dev_v_PSF_sums_[dev].size.x*dev_v_PSF_sums_[dev].size.y*dev_v_PSF_sums_[dev].size.z*sizeof(float), cudaMemcpyDefault));
   }
-  if (dev > 0)
+  if (dev > 0 && devicesToUse.size() > 1)
   {
     //collect data from other GPUs -- needs to be done that way because of atomics in kernels
-    checkCudaErrors(cudaSetDevice(0));
+    checkCudaErrors(cudaSetDevice(devicesToUse[0]));
     checkCudaErrors(cudaMemcpyAsync(dev_reconstructed_accbuf_.data, dev_reconstructed_[dev].data,
       N*sizeof(float), cudaMemcpyDefault));
-    thrust::device_ptr<float> ptr_recons(dev_reconstructed_[0].data);
+    thrust::device_ptr<float> ptr_recons(dev_reconstructed_[devicesToUse[0]].data);
     thrust::device_ptr<float> ptr_dev_recons(dev_reconstructed_accbuf_.data);
     thrust::transform(ptr_recons, ptr_recons + N, ptr_dev_recons, ptr_recons, plus<float>());
 
     checkCudaErrors(cudaMemcpyAsync(dev_reconstructed_accbuf_.data, dev_reconstructed_volWeigths[dev].data,
       N*sizeof(float), cudaMemcpyDefault));
-    thrust::device_ptr<float> ptr_recons_vW(dev_reconstructed_volWeigths[0].data);
+    thrust::device_ptr<float> ptr_recons_vW(dev_reconstructed_volWeigths[devicesToUse[0]].data);
     thrust::device_ptr<float> ptr_dev_recons_vW(dev_reconstructed_accbuf_.data);
     thrust::transform(ptr_recons_vW, ptr_recons_vW + N, ptr_dev_recons_vW, ptr_recons_vW, plus<float>());
   }
@@ -2430,15 +2462,31 @@ void Reconstruction::GaussianReconstructionOnX2(int& voxel_num, int dev)
 {
   checkCudaErrors(cudaSetDevice(dev));
   //printf("slice voxel count %d\n", dev);
-  for (unsigned int i = 0; i < dev_sliceVoxel_count_[dev].size.z; i++)
+
+  try
   {
-    checkCudaErrors(cudaDeviceSynchronize());
+	  checkCudaErrors(cudaDeviceSynchronize());
+	  unsigned int N2 = dev_sliceVoxel_count_[dev].size.x*dev_sliceVoxel_count_[dev].size.y*dev_sliceVoxel_count_[dev].size.z;
+	  thrust::device_ptr<int> ptr_count(dev_sliceVoxel_count_[dev].data);
+	  voxel_num = thrust::count_if(ptr_count, ptr_count + N2, is_larger_zero());
+  }
+  catch (thrust::system_error &e)
+  {
+	  // output an error message and exit
+	  std::cerr << "Thrust error: " << e.what() << std::endl;
+	  exit(-1);
+  }
+
+/*  for (unsigned int i = 0; i < dev_sliceVoxel_count_[dev].size.z; i++)
+  {
+//	  printf("%d ", i);
     unsigned int N2 = dev_sliceVoxel_count_[dev].size.x*dev_sliceVoxel_count_[dev].size.y;
     thrust::device_ptr<int> ptr_count(dev_sliceVoxel_count_[dev].data + (i*dev_sliceVoxel_count_[dev].size.x*dev_sliceVoxel_count_[dev].size.y));
     //only ++ if n > 0 == set pixel
-    int vnum = thrust::count_if(ptr_count, ptr_count + N2, is_larger_zero());
-    voxel_num = vnum;
-  }
+	int vnum = thrust::count_if(ptr_count, ptr_count + N2, is_larger_zero());
+
+	voxel_num += vnum;
+  }*/
 }
 
 template< typename T >
@@ -2464,14 +2512,15 @@ public:
 
 void Reconstruction::NormaliseBias(int iter, float sigma_bias)
 {
-  checkCudaErrors(cudaSetDevice(0));
+  checkCudaErrors(cudaSetDevice(devicesToUse[0]));
+  CHECK_ERROR(NormaliseBias_init);
 
-  unsigned int N = dev_reconstructed_[0].size.x*dev_reconstructed_[0].size.y*dev_reconstructed_[0].size.z;
+  unsigned int N = dev_reconstructed_[devicesToUse[0]].size.x*dev_reconstructed_[devicesToUse[0]].size.y*dev_reconstructed_[devicesToUse[0]].size.z;
   Volume<float> dev_bias_accbuf_;
-  dev_bias_accbuf_.init(dev_reconstructed_[0].size, dev_reconstructed_[0].dim);
+  dev_bias_accbuf_.init(dev_reconstructed_[devicesToUse[0]].size, dev_reconstructed_[devicesToUse[0]].dim);
 
   Volume<float> dev_volume_weights_accbuf_;
-  dev_volume_weights_accbuf_.init(dev_reconstructed_[0].size, dev_reconstructed_[0].dim);
+  dev_volume_weights_accbuf_.init(dev_reconstructed_[devicesToUse[0]].size, dev_reconstructed_[devicesToUse[0]].dim);
 
   if (multiThreadedGPU)
   {
@@ -2487,29 +2536,30 @@ void Reconstruction::NormaliseBias(int iter, float sigma_bias)
       NormaliseBiasOnX(iter, dev_bias_accbuf_, dev_volume_weights_accbuf_, sigma_bias, dev);
     }
   }
-
-  checkCudaErrors(cudaSetDevice(0));
+  CHECK_ERROR(NormaliseBiasOnX);
+  checkCudaErrors(cudaSetDevice(devicesToUse[0]));
 
   dev_bias_accbuf_.release();
   dev_volume_weights_accbuf_.release();
 
   //single GPU finalization
-  thrust::device_ptr<float> ptr_bias(dev_bias_[0].data);
+  thrust::device_ptr<float> ptr_bias(dev_bias_[devicesToUse[0]].data);
 
-  thrust::device_ptr<float> ptr_volWeights(dev_reconstructed_volWeigths[0].data);
+  thrust::device_ptr<float> ptr_volWeights(dev_reconstructed_volWeigths[devicesToUse[0]].data);
   thrust::transform(ptr_bias, ptr_bias + N, ptr_volWeights, ptr_bias, divS<float>()); //TODO check if divS or divSame
-
+  CHECK_ERROR(transform);
   /* thrust::device_ptr<float> ptr_weights(dev_volume_weights_[0].data);
   thrust::transform(ptr_weights, ptr_weights + N, ptr_volWeights, ptr_weights, divS<float>());*/
 
   dim3 blockSize3k = dim3(8, 8, 8);
-  dim3 gridSize3k = divup(dim3(dev_bias_[0].size.x, dev_bias_[0].size.y, dev_bias_[0].size.z), blockSize3k);
+  dim3 gridSize3k = divup(dim3(dev_bias_[devicesToUse[0]].size.x, dev_bias_[devicesToUse[0]].size.y, dev_bias_[devicesToUse[0]].size.z), blockSize3k);
   Volume<float> mbuf;
-  mbuf.init(dev_bias_[0].size, dev_bias_[0].dim);
-  GaussianConvolutionKernel3D << <gridSize3k, blockSize3k, 0, streams[0] >> >(dev_bias_[0].data, mbuf.data, sigma_bias, 0, dev_bias_[0].dim, dev_bias_[0].size);
-  GaussianConvolutionKernel3D << <gridSize3k, blockSize3k, 0, streams[0] >> >(mbuf.data, dev_bias_[0].data, sigma_bias, 1, dev_bias_[0].dim, dev_bias_[0].size);
-  GaussianConvolutionKernel3D << <gridSize3k, blockSize3k, 0, streams[0] >> >(dev_bias_[0].data, mbuf.data, sigma_bias, 2, dev_bias_[0].dim, dev_bias_[0].size);
-  checkCudaErrors(cudaMemcpy(dev_bias_[0].data, mbuf.data, dev_bias_[0].size.x*dev_bias_[0].size.y*dev_bias_[0].size.z*sizeof(float), cudaMemcpyDeviceToDevice));
+  mbuf.init(dev_bias_[devicesToUse[0]].size, dev_bias_[devicesToUse[0]].dim);
+  GaussianConvolutionKernel3D << <gridSize3k, blockSize3k, 0, streams[devicesToUse[0]] >> >(dev_bias_[devicesToUse[0]].data, mbuf.data, sigma_bias, 0, dev_bias_[devicesToUse[0]].dim, dev_bias_[devicesToUse[0]].size);
+  GaussianConvolutionKernel3D << <gridSize3k, blockSize3k, 0, streams[devicesToUse[0]] >> >(mbuf.data, dev_bias_[devicesToUse[0]].data, sigma_bias, 1, dev_bias_[devicesToUse[0]].dim, dev_bias_[devicesToUse[0]].size);
+  GaussianConvolutionKernel3D << <gridSize3k, blockSize3k, 0, streams[devicesToUse[0]] >> >(dev_bias_[devicesToUse[0]].data, mbuf.data, sigma_bias, 2, dev_bias_[devicesToUse[0]].dim, dev_bias_[devicesToUse[0]].size);
+  CHECK_ERROR(GaussianConvolutionKernel3D);
+  checkCudaErrors(cudaMemcpy(dev_bias_[devicesToUse[0]].data, mbuf.data, dev_bias_[devicesToUse[0]].size.x*dev_bias_[devicesToUse[0]].size.y*dev_bias_[devicesToUse[0]].size.z*sizeof(float), cudaMemcpyDeviceToDevice));
   cudaDeviceSynchronize();
   CHECK_ERROR(GaussianConvolutionKernel3D);
   //bias/=m;
@@ -2517,7 +2567,7 @@ void Reconstruction::NormaliseBias(int iter, float sigma_bias)
   thrust::transform(ptr_bias, ptr_bias + N, ptr_mbuf, ptr_bias, divS<float>());
 
   // *pi /=exp(-(*pb));
-  thrust::device_ptr<float> ptr_reconstructed(dev_reconstructed_[0].data);
+  thrust::device_ptr<float> ptr_reconstructed(dev_reconstructed_[devicesToUse[0]].data);
   thrust::transform(ptr_reconstructed, ptr_reconstructed + N, ptr_bias, ptr_reconstructed, divexp<float>());
 
   /* thrust::device_ptr<float> ptr_combinedVolWeights(dev_volume_weights_[0].data);
@@ -2528,11 +2578,11 @@ void Reconstruction::NormaliseBias(int iter, float sigma_bias)
   for (int d = 1; d < devicesToUse.size(); d++)
   {
     int dev = devicesToUse[d];
-    checkCudaErrors(cudaMemcpy(dev_reconstructed_[dev].data, dev_reconstructed_[0].data,
+    checkCudaErrors(cudaMemcpy(dev_reconstructed_[dev].data, dev_reconstructed_[devicesToUse[0]].data,
       N*sizeof(float), cudaMemcpyDefault));
-    checkCudaErrors(cudaMemcpy(dev_bias_[dev].data, dev_bias_[0].data,
+    checkCudaErrors(cudaMemcpy(dev_bias_[dev].data, dev_bias_[devicesToUse[0]].data,
       N*sizeof(float), cudaMemcpyDefault)); //might be not neccessary
-    checkCudaErrors(cudaMemcpy(dev_volume_weights_[dev].data, dev_volume_weights_[0].data,
+    checkCudaErrors(cudaMemcpy(dev_volume_weights_[dev].data, dev_volume_weights_[devicesToUse[0]].data,
       N*sizeof(float), cudaMemcpyDefault)); //might be not neccessary
   }
 
@@ -2545,54 +2595,61 @@ void Reconstruction::NormaliseBias(int iter, float sigma_bias)
 
 void Reconstruction::NormaliseBiasOnX(int iter, Volume<float>& dev_bias_accbuf_, Volume<float>& dev_volume_weights_accbuf_, float sigma_bias, int dev)
 {
-  unsigned int N = dev_reconstructed_[0].size.x*dev_reconstructed_[0].size.y*dev_reconstructed_[0].size.z;
+  cudaDeviceSynchronize();
+  unsigned int N = dev_reconstructed_[devicesToUse[0]].size.x*dev_reconstructed_[devicesToUse[0]].size.y*dev_reconstructed_[devicesToUse[0]].size.z;
   checkCudaErrors(cudaSetDevice(dev));
   // printf("NormaliseBias device %d\n", dev);
+  CHECK_ERROR(init);
 
   int start = dev_slice_range_offset[dev].x;
   int end = dev_slice_range_offset[dev].y;
 
   checkCudaErrors(cudaMemsetAsync(dev_bias_[dev].data, 0, dev_bias_[dev].size.x*dev_bias_[dev].size.y*dev_bias_[dev].size.z*sizeof(float)));
-
+  CHECK_ERROR(cudaMemsetAsync);
   int rest = dev_v_slices[dev].size.z;
   for (int i = 0; i < ceil(dev_v_slices[dev].size.z / (float)MAX_SLICES_PER_RUN); i++)
   {
     int thisrun = (rest >= MAX_SLICES_PER_RUN) ? MAX_SLICES_PER_RUN : rest;
 
-    dim3 blockSize3 = dim3(8, 8, 10);
+    dim3 blockSize3 = dim3(8, 8, 8);
     dim3 gridSize3 = divup(dim3(dev_v_slices[dev].size.x, dev_v_slices[dev].size.y, thisrun), blockSize3);
 
     normalizeBiasKernel3D_tex << <gridSize3, blockSize3, 0, streams[dev] >> >(dev_v_slices[dev].size.z, dev_v_slices[dev], dev_v_bias[dev],
       dev_d_scales[dev], dev_mask_[dev].data, dev_v_PSF_sums_[dev].data,
       dev_d_slicesI2W[dev], dev_d_slicesW2I[dev], dev_d_slicesTransformation[dev], dev_d_slicesInvTransformation[dev],
       dev_d_sliceDims[dev], reconstructedVoxelSize, dev_bias_[dev], dev_reconstructed_volWeigths[dev], dev_volume_weights_[dev], i*(MAX_SLICES_PER_RUN), thisrun);
-    cudaDeviceSynchronize();
+    //cudaDeviceSynchronize();
+    CHECK_ERROR(normalizeBiasKernel3D_tex);
     rest -= MAX_SLICES_PER_RUN;
   }
 
+ // printf("devicesToUse %d \n", devicesToUse.size());
   //copy back to GPU 0 if dev > 0
-  if (dev > 0)
+ if (dev > 0 && devicesToUse.size() > 1)
   {
-    checkCudaErrors(cudaSetDevice(0));
+    checkCudaErrors(cudaSetDevice(devicesToUse[0]));
     checkCudaErrors(cudaMemcpyAsync(dev_bias_accbuf_.data, dev_bias_[dev].data,
       N*sizeof(float), cudaMemcpyDefault));
-    thrust::device_ptr<float> ptr_bias(dev_bias_[0].data);
+    thrust::device_ptr<float> ptr_bias(dev_bias_[devicesToUse[0]].data);
     thrust::device_ptr<float> ptr_dev_bias(dev_bias_accbuf_.data);
     thrust::transform(ptr_bias, ptr_bias + N, ptr_dev_bias, ptr_bias, plus<float>());
 
-    checkCudaErrors(cudaSetDevice(0));
+    checkCudaErrors(cudaSetDevice(devicesToUse[0]));
     checkCudaErrors(cudaMemcpyAsync(dev_volume_weights_accbuf_.data, dev_volume_weights_[dev].data,
       N*sizeof(float), cudaMemcpyDefault));
-    thrust::device_ptr<float> ptr_volume_weights_(dev_volume_weights_[0].data);
+    thrust::device_ptr<float> ptr_volume_weights_(dev_volume_weights_[devicesToUse[0]].data);
     thrust::device_ptr<float> ptr_dev_volume_weights_(dev_volume_weights_accbuf_.data);
     thrust::transform(ptr_volume_weights_, ptr_volume_weights_ + N, ptr_dev_volume_weights_, ptr_volume_weights_, plus<float>());
   }
+ checkCudaErrors(cudaDeviceSynchronize());
+  CHECK_ERROR(end_of_NormaliseBiasOnX);
 }
 
 void Reconstruction::SimulateSlices(std::vector<bool>& slice_inside)
 {
   unsigned int coffset = 0;
-
+  checkCudaErrors(cudaSetDevice(devicesToUse[0]));
+  CHECK_ERROR(SimulateSlices__);
   if (multiThreadedGPU)
   {
     for (int d = 0; d < devicesToUse.size(); d++)
@@ -2612,13 +2669,17 @@ void Reconstruction::SimulateSlices(std::vector<bool>& slice_inside)
       coffset += dev_v_simulated_inside[dev].size.z;
     }
   }
-  checkCudaErrors(cudaSetDevice(0));
+  CHECK_ERROR(simulated_inside masking);
+  checkCudaErrors(cudaSetDevice(devicesToUse[0]));
+
 
   //check if necessary here
-  unsigned int N = dev_bias_[0].size.x*dev_bias_[0].size.y*dev_bias_[0].size.z;
-  thrust::device_ptr<float> ptr_mask(dev_mask_[0].data);
-  thrust::device_ptr<float> ptr_reconstructed(dev_reconstructed_[0].data);
+#if 0
+  unsigned int N = dev_reconstructed_[devicesToUse[0]].size.x*dev_reconstructed_[devicesToUse[0]].size.y*dev_reconstructed_[devicesToUse[0]].size.z;
+  thrust::device_ptr<float> ptr_mask(dev_mask_[devicesToUse[0]].data);
+  thrust::device_ptr<float> ptr_reconstructed(dev_reconstructed_[devicesToUse[0]].data);
   thrust::transform(ptr_reconstructed, ptr_reconstructed + N, ptr_mask, ptr_reconstructed, maskS<float>());
+#endif
   CHECK_ERROR(simulated_inside masking);
 }
 
@@ -2626,6 +2687,7 @@ void Reconstruction::SimulateSlicesOnX(std::vector<bool>::iterator slice_inside,
 {
   checkCudaErrors(cudaSetDevice(dev));
   //printf("SimulateSlices device %d\n", dev);
+  CHECK_ERROR(SimulateSlicesOnX);
 
   int start = dev_slice_range_offset[dev].x;
   int end = dev_slice_range_offset[dev].y;
@@ -2634,7 +2696,7 @@ void Reconstruction::SimulateSlicesOnX(std::vector<bool>::iterator slice_inside,
   for (int i = 0; i < ceil(dev_v_slices[dev].size.z / (float)MAX_SLICES_PER_RUN); i++)
   {
     int thisrun = (rest >= MAX_SLICES_PER_RUN) ? MAX_SLICES_PER_RUN : rest;
-    dim3 blockSize3 = dim3(8, 8, 9);
+    dim3 blockSize3 = dim3(8, 8, 8);
     dim3 gridSize3 = divup(dim3(dev_v_slices[dev].size.x, dev_v_slices[dev].size.y, thisrun), blockSize3);
 
     simulateSlicesKernel3D_tex << <gridSize3, blockSize3, 0, streams[dev] >> >(dev_v_slices[dev].size.z, dev_v_slices[dev].data,
@@ -2685,17 +2747,19 @@ void Reconstruction::SimulateSlicesOnX(std::vector<bool>::iterator slice_inside,
   CHECK_ERROR(simulated_inside count);
 
   //check if necessary here
-  unsigned int N = dev_bias_[0].size.x*dev_bias_[0].size.y*dev_bias_[0].size.z;
+#if 0
+  unsigned int N = dev_bias_[devicesToUse[0]].size.x*dev_bias_[devicesToUse[0]].size.y*dev_bias_[devicesToUse[0]].size.z;
   thrust::device_ptr<float> ptr_mask(dev_mask_[dev].data);
   thrust::device_ptr<float> ptr_reconstructed(dev_reconstructed_[dev].data);
   thrust::transform(ptr_reconstructed, ptr_reconstructed + N, ptr_mask, ptr_reconstructed, maskS<float>());
+#endif
   CHECK_ERROR(simulated_inside masking);
 }
 
 
 __global__ void EStepKernel3D_tex(int numSlices, float* __restrict slices, float* __restrict bias, float* weights,
   float* __restrict simslices, float* __restrict simweights, float* __restrict scales,
-  float _m, float _sigma, float _mix, uint2 vSize)
+  float _m, float _sigma, float _mix, uint2 vSize, bool disableBiasCorrection)
 {
 
   const uint3 pos = make_uint3(blockIdx.x * blockDim.x + threadIdx.x,
@@ -2718,7 +2782,11 @@ __global__ void EStepKernel3D_tex(int numSlices, float* __restrict slices, float
   float ss = simslices[idx];
   float scale = scales[pos.z];
 
-  float sliceVal = s * exp(-b) * scale;
+  float sliceVal = 0;
+  if (disableBiasCorrection)
+    sliceVal = s * scale;
+  else
+    sliceVal = s * exp(-b) * scale;
 
   sliceVal -= ss;
 
@@ -2727,14 +2795,14 @@ __global__ void EStepKernel3D_tex(int numSlices, float* __restrict slices, float
   //Uniform distribution for outliers (likelihood)
   float m = M_(_m);
 
-  float weight = (g * _mix) / (g *_mix + m * (1.0 - _mix));
+  float weight = (g * _mix) / (g *_mix + m * (1.0f - _mix));
   if (sw > 0)
   {
     weights[idx] = weight;
   }
   else
   {
-    weights[idx] = 0.0;
+    weights[idx] = 0.0f;
   }
 }
 
@@ -2792,7 +2860,7 @@ void Reconstruction::EStep(float _m, float _sigma, float _mix, std::vector<float
     EStepOnX(_m, _sigma, _mix, slice_potential, d_lweigthsdata, dev);
   }
   //}
-  checkCudaErrors(cudaSetDevice(0));
+  checkCudaErrors(cudaSetDevice(devicesToUse[0]));
 
 }
 
@@ -2811,7 +2879,7 @@ void Reconstruction::EStepOnX(float _m, float _sigma, float _mix, std::vector<fl
 
   EStepKernel3D_tex << <gridSize3, blockSize3, 0, streams[dev] >> >(dev_v_slices[dev].size.z, dev_v_slices[dev].data, dev_v_bias[dev].data, dev_v_weights[dev].data,
     dev_v_simulated_slices[dev].data, dev_v_simulated_weights[dev].data, dev_d_scales[dev], _m, _sigma, _mix,
-    make_uint2(dev_v_slices[dev].size.x, dev_v_slices[dev].size.y));
+    make_uint2(dev_v_slices[dev].size.x, dev_v_slices[dev].size.y), _disableBiasC);
 
   CHECK_ERROR(EStepKernel3D_tex);
 
@@ -2822,8 +2890,9 @@ void Reconstruction::EStepOnX(float _m, float _sigma, float _mix, std::vector<fl
 
     thrust::device_ptr<float> d_w(dev_v_weights[dev].data + (i*dev_v_weights[dev].size.x*dev_v_weights[dev].size.y));//w->data());
     thrust::device_ptr<float> d_sw(dev_v_simulated_weights[dev].data + (i*dev_v_simulated_weights[dev].size.x*dev_v_simulated_weights[dev].size.y));//sw->data());
-    tuple<float, float> out = transform_reduce(make_zip_iterator(make_tuple(d_w, d_sw)), make_zip_iterator(make_tuple(d_w + N, d_sw + N)),
-      transformSlicePotential(), make_tuple(0.0, 0.0), reduceSlicePotential());
+    tuple<float, float> out = transform_reduce(make_zip_iterator(make_tuple<thrust::device_ptr<float>, thrust::device_ptr<float> >(d_w, d_sw)), 
+      make_zip_iterator(make_tuple<thrust::device_ptr<float>, thrust::device_ptr<float> >(d_w + N, d_sw + N)),
+      transformSlicePotential(), make_tuple<float, float>(0.0f, 0.0f), reduceSlicePotential());
 
     if (thrust::get<1>(out) > 0)
     {
@@ -2887,6 +2956,43 @@ struct transformMStep3D
 };
 
 
+
+struct transformMStep3DNoBias
+{
+  __host__ __device__
+    thrust::tuple<float, float, float, float, float> operator()(const thrust::tuple<float, float, float, float, float>& v)
+    //thrust::tuple<sigma_, mix_, count, e, e> //this order is very important for the thrust optization
+  {
+    const float s_ = thrust::get<0>(v);
+    const float w_ = thrust::get<1>(v);
+    const float ss_ = thrust::get<2>(v);
+    const float sw_ = thrust::get<3>(v);
+    const float scale = thrust::get<4>(v);
+
+    float sigma_ = 0.0f;
+    float mix_ = 0.0f;
+    float count = 0.0f;
+    float e = 0.0f;
+
+    thrust::tuple<float, float, float, float, float> t;
+
+    if (s_ != -1.0f  && sw_ > 0.99f)
+    {
+      e = (s_ * scale) - ss_;
+      sigma_ = e * e * w_;
+      mix_ = w_;
+      count = 1.0;
+      float e1 = e;
+      t = thrust::make_tuple(sigma_, mix_, count, e, e1);
+    }
+    else
+    {
+      t = thrust::make_tuple(0.0, 0.0, 0.0, DBL_MAX, DBL_MIN);
+    }
+    return t;
+  }
+};
+
 struct reduceMStep
 {
   __host__ __device__
@@ -2940,7 +3046,7 @@ void Reconstruction::MStep(int iter, float _step, float& _sigma, float& _mix, fl
     max_ = max(max_, get<4>(results));
   }
   //}
-  checkCudaErrors(cudaSetDevice(0));
+  checkCudaErrors(cudaSetDevice(devicesToUse[0]));
   //printf("GPU sigma %f, mix %f, num %f, min_ %f, max_ %f\n", sigma, mix, num, min_, max_);
 
   if (mix > 0) {
@@ -2968,7 +3074,7 @@ void Reconstruction::MStepOnX(thrust::tuple<float, float, float, float, float> &
   int end = dev_slice_range_offset[dev].y;
 
   thrust::device_ptr<float> d_s(dev_v_slices[dev].data);
-  thrust::device_ptr<float> d_b(dev_v_bias[dev].data);
+
   thrust::device_ptr<float> d_w(dev_v_weights[dev].data);
   thrust::device_ptr<float> d_ss(dev_v_simulated_slices[dev].data);
   thrust::device_ptr<float> d_sw(dev_v_simulated_weights[dev].data);
@@ -2983,9 +3089,20 @@ void Reconstruction::MStepOnX(thrust::tuple<float, float, float, float, float> &
 
   unsigned int N3 = dev_v_buffer[dev].size.x*dev_v_buffer[dev].size.y*dev_v_buffer[dev].size.z;
 
-  results = transform_reduce(make_zip_iterator(make_tuple(d_s, d_b, d_w, d_ss, d_sw, d_buf)),
-    make_zip_iterator(make_tuple(d_s + N3, d_b + N3, d_w + N3, d_ss + N3, d_sw + N3, d_buf + N3)), transformMStep3D(),
-    make_tuple<float, float, float, float, float>(0.0, 0.0, 0.0, 0.0, 0.0), reduceMStep());
+ // thrust::tuple<float, float, float, float, float> res_ = thrust::make_tuple<float, float, float, float, float>(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+  if (_disableBiasC)
+  {
+    results = transform_reduce(make_zip_iterator(make_tuple(d_s, d_w, d_ss, d_sw, d_buf)),
+      make_zip_iterator(make_tuple(d_s + N3, d_w + N3, d_ss + N3, d_sw + N3, d_buf + N3)), transformMStep3DNoBias(),
+      make_tuple<float, float, float, float, float>(0.0, 0.0, 0.0, 0.0, 0.0), reduceMStep());
+  }
+  else
+  {
+    thrust::device_ptr<float> d_b(dev_v_bias[dev].data);
+    results = transform_reduce(make_zip_iterator(make_tuple(d_s, d_b, d_w, d_ss, d_sw, d_buf)),
+      make_zip_iterator(make_tuple(d_s + N3, d_b + N3, d_w + N3, d_ss + N3, d_sw + N3, d_buf + N3)), transformMStep3D(),
+      make_tuple<float, float, float, float, float>(0.0, 0.0, 0.0, 0.0, 0.0), reduceMStep());
+  }
 }
 
 struct transformScale
@@ -3001,9 +3118,9 @@ struct transformScale
     const float ss_ = thrust::get<3>(v);
     const float sw_ = thrust::get<4>(v);
 
-    if ((s_ == -1) || sw_ <= 0.99)
+    if ((s_ == -1.0f) || sw_ <= 0.99f)
     {
-      return make_tuple(0.0, 0.0);
+      return make_tuple(0.0f, 0.0f);
     }
     else
     {
@@ -3015,6 +3132,31 @@ struct transformScale
   }
 };
 
+
+struct transformScalenoBias
+{
+  transformScalenoBias(){}
+
+  __host__ __device__
+    thrust::tuple<float, float> operator()(const thrust::tuple<float, float, float, float>& v)
+  {
+    float s_ = thrust::get<0>(v);
+    const float w_ = thrust::get<1>(v);
+    const float ss_ = thrust::get<2>(v);
+    const float sw_ = thrust::get<3>(v);
+
+    if ((s_ == -1.0f) || sw_ <= 0.99f)
+    {
+      return make_tuple(0.0f, 0.0f);
+    }
+    else
+    {
+      float scalenum = w_ * s_ * ss_;
+      float scaleden = w_ * s_ * s_;
+      return make_tuple(scalenum, scaleden);
+    }
+  }
+};
 
 struct reduceScale
 {
@@ -3058,14 +3200,25 @@ void Reconstruction::CalculateScaleVectorOnX(std::vector<float>& scale_vec, int 
   for (unsigned int i = 0; i < dev_v_slices[dev].size.z; i++)
   {
     thrust::device_ptr<float> d_s(dev_v_slices[dev].data + (i*N));
-    thrust::device_ptr<float> d_b(dev_v_bias[dev].data + (i*N));
     thrust::device_ptr<float> d_w(dev_v_weights[dev].data + (i*N));
     thrust::device_ptr<float> d_ss(dev_v_simulated_slices[dev].data + (i*N));
     thrust::device_ptr<float> d_sw(dev_v_simulated_weights[dev].data + (i*N));
 
-    thrust::tuple<float, float> out = transform_reduce(make_zip_iterator(make_tuple(d_s, d_b, d_w, d_ss, d_sw)),
-      make_zip_iterator(make_tuple(d_s + N, d_b + N, d_w + N, d_ss + N, d_sw + N)), transformScale(),
-      make_tuple(0.0, 0.0), reduceScale());
+    thrust::tuple<float, float> out = thrust::make_tuple<float, float>(0.0f,0.0f);
+    if (_disableBiasC)
+    {
+      //code copy more efficent in this case
+     out = transform_reduce(make_zip_iterator(make_tuple(d_s, d_w, d_ss, d_sw)),
+        make_zip_iterator(make_tuple(d_s + N, d_w + N, d_ss + N, d_sw + N)), transformScalenoBias(),
+        make_tuple(0.0f, 0.0f), reduceScale());
+    }
+    else
+    {
+      thrust::device_ptr<float> d_b(dev_v_bias[dev].data + (i*N));
+      out = transform_reduce(make_zip_iterator(make_tuple(d_s, d_b, d_w, d_ss, d_sw)),
+        make_zip_iterator(make_tuple(d_s + N, d_b + N, d_w + N, d_ss + N, d_sw + N)), transformScale(),
+        make_tuple(0.0f, 0.0f), reduceScale());
+    }
 
     if (thrust::get<1>(out) != 0.0)
     {
@@ -3080,7 +3233,7 @@ void Reconstruction::CalculateScaleVectorOnX(std::vector<float>& scale_vec, int 
 }
 
 __global__ void InitializeEMValuesKernel(int numSlices, int* __restrict d_sliceSicesX, int* __restrict d_sliceSicesY,
-  float* __restrict slices, float* bias, float* weights, uint2 vSize)
+  float* __restrict slices/*, float* bias*/, float* weights, uint2 vSize)
 {
   const int3 pos = make_int3((blockIdx.x* blockDim.x) + threadIdx.x,
     (blockIdx.y* blockDim.y) + threadIdx.y,
@@ -3104,7 +3257,7 @@ __global__ void InitializeEMValuesKernel(int numSlices, int* __restrict d_sliceS
   {
     weights[idx] = 0;
   }
-  bias[idx] = 0;
+  //bias[idx] = 0;
 }
 
 void Reconstruction::InitializeEMValues()
@@ -3124,7 +3277,7 @@ void Reconstruction::InitializeEMValues()
     }
   }
   CHECK_ERROR(InitializeEMValuesKernel);
-  checkCudaErrors(cudaSetDevice(0));
+  checkCudaErrors(cudaSetDevice(devicesToUse[0]));
 }
 
 
@@ -3141,7 +3294,13 @@ void Reconstruction::InitializeEMValuesOnX(int dev)
 
   //printf("%llx %llx %llx %llx %llx\n",dev_d_slice_sicesX[dev], dev_d_slice_sicesY[dev], dev_v_slices[dev].data, dev_v_bias[dev].data, dev_v_weights[dev].data); 
   InitializeEMValuesKernel << <gridSize3, blockSize3 >> >(dev_v_slices[dev].size.z, dev_d_slice_sicesX[dev], dev_d_slice_sicesY[dev],
-    dev_v_slices[dev].data, dev_v_bias[dev].data, dev_v_weights[dev].data, make_uint2(dev_v_slices[dev].size.x, dev_v_slices[dev].size.y));
+    dev_v_slices[dev].data/*, dev_v_bias[dev].data*/, dev_v_weights[dev].data, make_uint2(dev_v_slices[dev].size.x, dev_v_slices[dev].size.y));
+
+  if (!_disableBiasC)
+  {
+    unsigned int N = dev_v_bias[dev].size.x*dev_v_bias[dev].size.y*dev_v_bias[dev].size.z;
+    cudaMemsetAsync(dev_v_bias[dev].data, 0, N*sizeof(float));
+  }
 }
 
 
@@ -3163,18 +3322,18 @@ __global__ void maskVolumeKernel(Volume<float> reconstructed, Volume<float> mask
 void Reconstruction::maskVolume()
 {
   printf("masking volume \n");
-  checkCudaErrors(cudaSetDevice(0));
+  checkCudaErrors(cudaSetDevice(devicesToUse[0]));
   dim3 blockSize = dim3(8, 8, 8);
-  dim3 gridSize = divup(dim3(dev_reconstructed_[0].size.x, dev_reconstructed_[0].size.y, dev_reconstructed_[0].size.z), blockSize);
+  dim3 gridSize = divup(dim3(dev_reconstructed_[devicesToUse[0]].size.x, dev_reconstructed_[devicesToUse[0]].size.y, dev_reconstructed_[devicesToUse[0]].size.z), blockSize);
 
-  maskVolumeKernel << <gridSize, blockSize, 0, streams[0] >> >(dev_reconstructed_[0], dev_mask_[0]);
+  maskVolumeKernel << <gridSize, blockSize, 0, streams[devicesToUse[0]] >> >(dev_reconstructed_[devicesToUse[0]], dev_mask_[devicesToUse[0]]);
 
   //update other GPUs
-  unsigned int N = dev_reconstructed_[0].size.x*dev_reconstructed_[0].size.y*dev_reconstructed_[0].size.z;
+  unsigned int N = dev_reconstructed_[devicesToUse[0]].size.x*dev_reconstructed_[devicesToUse[0]].size.y*dev_reconstructed_[devicesToUse[0]].size.z;
   for (int d = 1; d < devicesToUse.size(); d++)
   {
     int dev = devicesToUse[d];
-    checkCudaErrors(cudaMemcpy(dev_reconstructed_[dev].data, dev_reconstructed_[0].data,
+    checkCudaErrors(cudaMemcpy(dev_reconstructed_[dev].data, dev_reconstructed_[devicesToUse[0]].data,
       N*sizeof(float), cudaMemcpyDefault));
   }
 
@@ -3213,7 +3372,7 @@ void Reconstruction::RestoreSliceIntensities(std::vector<float> stack_factors_, 
   int* d_stack_index_p = thrust::raw_pointer_cast(&d_stack_index_[0]);
   uint2 vSize = make_uint2(v_slices.size.x, v_slices.size.y);
 
-  RestoreSliceIntensitiesKernel << <gridSize, blockSize, 0, streams[0] >> >(v_slices.data, d_stack_factors_p, d_stack_index_p, vSize, v_slices.size.z);
+  RestoreSliceIntensitiesKernel << <gridSize, blockSize, 0, streams[devicesToUse[0]] >> >(v_slices.data, d_stack_factors_p, d_stack_index_p, vSize, v_slices.size.z);
   CHECK_ERROR(RestoreSliceIntensitiesKernel);
 }
 
@@ -3289,15 +3448,15 @@ void Reconstruction::ScaleVolume()
     scaleden += reduce(d_d, d_d + N, 0.0, plus<float>());
 
   }
-  checkCudaErrors(cudaSetDevice(0));
+  checkCudaErrors(cudaSetDevice(devicesToUse[0]));
 
   float scale = scalenum / scaleden;
   printf("Volume scale GPU: %f\n", scale);
 
   dim3 blockSize = dim3(8, 8, 8);
-  dim3 gridSize = divup(dim3(dev_reconstructed_[0].size.x, dev_reconstructed_[0].size.y, dev_reconstructed_[0].size.z), blockSize);
+  dim3 gridSize = divup(dim3(dev_reconstructed_[devicesToUse[0]].size.x, dev_reconstructed_[devicesToUse[0]].size.y, dev_reconstructed_[devicesToUse[0]].size.z), blockSize);
 
-  scaleVolumeKernel << <gridSize, blockSize, 0, streams[0] >> >(dev_reconstructed_[0], scale);
+  scaleVolumeKernel << <gridSize, blockSize, 0, streams[devicesToUse[0]] >> >(dev_reconstructed_[devicesToUse[0]], scale);
 
   checkCudaErrors(cudaDeviceSynchronize());
 
@@ -3636,11 +3795,11 @@ void Reconstruction::prepareSliceToVolumeReg()
 {
 
   //update other GPUs -- not done in final recon step
-  unsigned int N = dev_reconstructed_[0].size.x*dev_reconstructed_[0].size.y*dev_reconstructed_[0].size.z;
+  unsigned int N = dev_reconstructed_[devicesToUse[0]].size.x*dev_reconstructed_[devicesToUse[0]].size.y*dev_reconstructed_[devicesToUse[0]].size.z;
   for (int d = 1; d < devicesToUse.size(); d++)
   {
     int dev = devicesToUse[d];
-    checkCudaErrors(cudaMemcpy(dev_reconstructed_[dev].data, dev_reconstructed_[0].data,
+    checkCudaErrors(cudaMemcpy(dev_reconstructed_[dev].data, dev_reconstructed_[devicesToUse[0]].data,
       N*sizeof(float), cudaMemcpyDefault));
   }
 
@@ -3668,16 +3827,16 @@ void Reconstruction::prepareSliceToVolumeReg()
   }
 
 
-  checkCudaErrors(cudaSetDevice(0));
+  checkCudaErrors(cudaSetDevice(devicesToUse[0]));
 
 #if 0
   ////////////////////////singe GPU
   Volume<float> recon_float;
-  recon_float.init(dev_reconstructed_[0].size, dev_reconstructed_[0].dim);
+  recon_float.init(dev_reconstructed_[devicesToUse[0]].size, dev_reconstructed_[devicesToUse[0]].dim);
   //printf("initVolume/n");
   dim3 blockSize3 = dim3(8, 8, 8);
-  dim3 gridSize3 = divup(dim3(dev_reconstructed_[0].size.x, dev_reconstructed_[0].size.y, dev_reconstructed_[0].size.z), blockSize3);
-  castToFloat << <gridSize3, blockSize3, 0, streams[0] >> >(dev_reconstructed_[0], recon_float);
+  dim3 gridSize3 = divup(dim3(dev_reconstructed_[devicesToUse[0]].size.x, dev_reconstructed_[devicesToUse[0]].size.y, dev_reconstructed_[devicesToUse[0]].size.z), blockSize3);
+  castToFloat << <gridSize3, blockSize3, 0, streams[devicesToUse[0]] >> >(dev_reconstructed_[devicesToUse[0]], recon_float);
   CHECK_ERROR(castToFloat);
   //printf("castToFloat/n");
   regSlices.init(v_slices_resampled_float.size, v_slices_resampled_float.dim);
@@ -3726,7 +3885,7 @@ void Reconstruction::prepareSliceToVolumeReg()
   //TODO should get deleted somewhere
   _Blurring = new float[_NumberOfLevels];
   _LengthOfSteps = new float[_NumberOfLevels];
-  _Blurring[0] = (dev_reconstructed_[0].dim.x) / 2.0f;
+  _Blurring[0] = (dev_reconstructed_[devicesToUse[0]].dim.x) / 2.0f;
   for (int i = 0; i < _NumberOfLevels; i++) {
     _LengthOfSteps[i] = 0.1 * pow(2.0f, i);
   }
@@ -4225,7 +4384,8 @@ __global__ void gradientStep(Matrix4* matrices, const float* gradient, int activ
   matrix.data[2].z = cosrx*cosry;
 }
 
-__global__ void checkImprovement(int* newActiveMask, int activeSlices, int slices, const int* activeMask, float* similarities, int cursim, int prev, float eps)
+__global__ void checkImprovement(int* newActiveMask, int activeSlices, int slices, const int* activeMask, 
+float* similarities, int cursim, int prev, float eps)
 {
   int tid = threadIdx.x + blockIdx.x * blockDim.x;
   int active = 0;
@@ -4564,7 +4724,7 @@ void Reconstruction::updateResampledSlicesI2W(std::vector<Matrix4> ofsSlice)
       updateResampledSlicesI2WOnX(ofsSlice, allocate, dev);
     }
   }
-  checkCudaErrors(cudaSetDevice(0));
+  checkCudaErrors(cudaSetDevice(devicesToUse[0]));
 
   if (!dev_d_slicesOfs_allocated)
   {
@@ -4637,7 +4797,7 @@ void Reconstruction::registerSlicesToVolume(std::vector<Matrix4>& transf_)
     checkCudaErrors(cudaMemcpy(lrdata, dev_regSlices[dev].data, num_elems_*sizeof(float), cudaMemcpyDefault));
     lrdata += num_elems_;
   }
-  checkCudaErrors(cudaSetDevice(0));
+  checkCudaErrors(cudaSetDevice(devicesToUse[0]));
 
   delete[] dev_slice;
 
@@ -4693,7 +4853,7 @@ void Reconstruction::registerSlicesToVolume(std::vector<Matrix4>& transf_)
       registerSlicesToVolumeOnX2(dev);
     }
   }
-  checkCudaErrors(cudaSetDevice(0));
+  checkCudaErrors(cudaSetDevice(devicesToUse[0]));
 #endif
 
   transf_ = h_trans;
@@ -4731,20 +4891,23 @@ void Reconstruction::initRegStorageVolumes(uint3 size, float3 dim)
   bool init = !regStorageInit;
   if (init)
   {
-    dev_v_slices_resampled.resize(storagesize);
-    dev_v_slices_resampled_float.resize(storagesize);
-    dev_regSlices.resize(storagesize);
-    dev_temp_slices.resize(storagesize);
-    dev_recon_matrices.resize(storagesize);
-    dev_recon_matrices_orig.resize(storagesize);
-    dev_recon_params.resize(storagesize);
-    dev_recon_similarities.resize(storagesize);
-    dev_recon_gradient.resize(storagesize);
-    dev_active_slices.resize(storagesize);
-    dev_active_slices2.resize(storagesize);
-    dev_active_slices_prev.resize(storagesize);
-    dev_temp_float.resize(storagesize);
-    dev_temp_int.resize(storagesize);
+    if (!_useCPUReg)
+    {
+      dev_v_slices_resampled.resize(storagesize);
+      dev_v_slices_resampled_float.resize(storagesize);
+      dev_regSlices.resize(storagesize);
+      dev_temp_slices.resize(storagesize);
+      dev_recon_matrices.resize(storagesize);
+      dev_recon_matrices_orig.resize(storagesize);
+      dev_recon_params.resize(storagesize);
+      dev_recon_similarities.resize(storagesize);
+      dev_recon_gradient.resize(storagesize);
+      dev_active_slices.resize(storagesize);
+      dev_active_slices2.resize(storagesize);
+      dev_active_slices_prev.resize(storagesize);
+      dev_temp_float.resize(storagesize);
+      dev_temp_int.resize(storagesize);
+    }
     regStorageInit = true;
   }
   if (multiThreadedGPU)
@@ -4792,60 +4955,61 @@ void Reconstruction::initRegStorageVolumesOnX(uint3 size, float3 dim, bool init,
 
   if (init)
   {
-    LayeredSurface3D<float> l_slices;
-    l_slices.init(dsize, dim);
-    dev_v_slices_resampled[dev] = (l_slices);
+    if (!_useCPUReg)
+    {
+      LayeredSurface3D<float> l_slices;
+      l_slices.init(dsize, dim);
+      dev_v_slices_resampled[dev] = (l_slices);
 
-    LayeredSurface3D<float> l_rfslices;
-    l_rfslices.init(dsize, dim);
-    dev_v_slices_resampled_float[dev] = (l_rfslices);
+      LayeredSurface3D<float> l_rfslices;
+      l_rfslices.init(dsize, dim);
+      dev_v_slices_resampled_float[dev] = (l_rfslices);
 
-    LayeredSurface3D<float>l_regSlices;
-    l_regSlices.init(dsize, dim);
-    dev_regSlices[dev] = (l_regSlices);
+      LayeredSurface3D<float>l_regSlices;
+      l_regSlices.init(dsize, dim);
+      dev_regSlices[dev] = (l_regSlices);
 
-    // FIXXME: need cleanup for everythign that is following
-    LayeredSurface3D<float> l_tempSlices;
-    l_tempSlices.init(dsize, dim);
-    dev_temp_slices[dev] = (l_tempSlices);
+      // FIXXME: need cleanup for everythign that is following
+      LayeredSurface3D<float> l_tempSlices;
+      l_tempSlices.init(dsize, dim);
+      dev_temp_slices[dev] = (l_tempSlices);
+  
+      Matrix4* l_Matrices;
+      checkCudaErrors(cudaMalloc(&l_Matrices, sizeof(Matrix4)*dsize.z));
+      dev_recon_matrices[dev] = (l_Matrices);
 
-    Matrix4* l_Matrices;
-    checkCudaErrors(cudaMalloc(&l_Matrices, sizeof(Matrix4)*dsize.z));
-    dev_recon_matrices[dev] = (l_Matrices);
+      checkCudaErrors(cudaMalloc(&l_Matrices, sizeof(Matrix4)*dsize.z));
+      dev_recon_matrices_orig[dev] = (l_Matrices);
 
-    checkCudaErrors(cudaMalloc(&l_Matrices, sizeof(Matrix4)*dsize.z));
-    dev_recon_matrices_orig[dev] = (l_Matrices);
+      float* l_params;
+      checkCudaErrors(cudaMalloc(&l_params, sizeof(float) * 6 * dsize.z));
+      dev_recon_params[dev] = (l_params);
 
-    float* l_params;
-    checkCudaErrors(cudaMalloc(&l_params, sizeof(float) * 6 * dsize.z));
-    dev_recon_params[dev] = (l_params);
+      float* l_similaritites;
+      checkCudaErrors(cudaMalloc(&l_similaritites, sizeof(float) * 5 * dsize.z));
+      dev_recon_similarities[dev] = (l_similaritites);
 
-    float* l_similaritites;
-    checkCudaErrors(cudaMalloc(&l_similaritites, sizeof(float) * 5 * dsize.z));
-    dev_recon_similarities[dev] = (l_similaritites);
+      float* l_gradient;
+      checkCudaErrors(cudaMalloc(&l_gradient, sizeof(float) * 7 * dsize.z));
+      dev_recon_gradient[dev] = (l_gradient);
 
-    float* l_gradient;
-    checkCudaErrors(cudaMalloc(&l_gradient, sizeof(float) * 7 * dsize.z));
-    dev_recon_gradient[dev] = (l_gradient);
+      int* l_active_slices;
+      checkCudaErrors(cudaMalloc(&l_active_slices, sizeof(int)*dsize.z));
+      dev_active_slices[dev] = (l_active_slices);
 
-    int* l_active_slices;
-    checkCudaErrors(cudaMalloc(&l_active_slices, sizeof(int)*dsize.z));
-    dev_active_slices[dev] = (l_active_slices);
+      checkCudaErrors(cudaMalloc(&l_active_slices, sizeof(int)*dsize.z));
+      dev_active_slices2[dev] = (l_active_slices);
 
-    checkCudaErrors(cudaMalloc(&l_active_slices, sizeof(int)*dsize.z));
-    dev_active_slices2[dev] = (l_active_slices);
+      checkCudaErrors(cudaMalloc(&l_active_slices, sizeof(int)*dsize.z));
+      dev_active_slices_prev[dev] = (l_active_slices);
 
-    checkCudaErrors(cudaMalloc(&l_active_slices, sizeof(int)*dsize.z));
-    dev_active_slices_prev[dev] = (l_active_slices);
-
-
-
-    float* l_temp_float_slices;
-    checkCudaErrors(cudaMalloc(&l_temp_float_slices, sizeof(float) * 6 * dsize.z));
-    dev_temp_float[dev] = (l_temp_float_slices);
-    int* l_temp_int_slices;
-    checkCudaErrors(cudaMalloc(&l_temp_int_slices, sizeof(int) * 2 * dsize.z));
-    dev_temp_int[dev] = (l_temp_int_slices);
+      float* l_temp_float_slices;
+      checkCudaErrors(cudaMalloc(&l_temp_float_slices, sizeof(float) * 6 * dsize.z));
+      dev_temp_float[dev] = (l_temp_float_slices);
+      int* l_temp_int_slices;
+      checkCudaErrors(cudaMalloc(&l_temp_int_slices, sizeof(int) * 2 * dsize.z));
+      dev_temp_int[dev] = (l_temp_int_slices);
+    }
 
   }
 }
@@ -4875,7 +5039,7 @@ void Reconstruction::FillRegSlices(float* sdata, std::vector<Matrix4> slices_res
     }
   }
 
-  checkCudaErrors(cudaSetDevice(0));
+  checkCudaErrors(cudaSetDevice(devicesToUse[0]));
 }
 
 
@@ -5115,15 +5279,174 @@ void Reconstruction::syncGPUrecon(float* reconstructed)
 {
   if (_debugGPU)
   {
-    cudaMemcpy(dev_reconstructed_[0].data, reconstructed, dev_reconstructed_[0].size.x*dev_reconstructed_[0].size.y*dev_reconstructed_[0].size.z*sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(dev_reconstructed_[devicesToUse[0]].data, reconstructed, dev_reconstructed_[devicesToUse[0]].size.x*dev_reconstructed_[devicesToUse[0]].size.y*dev_reconstructed_[devicesToUse[0]].size.z*sizeof(float), cudaMemcpyHostToDevice);
     cudaDeviceSynchronize();
   }
 }
 
 void Reconstruction::getVolWeights(float* weights)
 {
-  cudaMemcpy(weights, dev_reconstructed_volWeigths[0].data,
-    dev_reconstructed_volWeigths[0].size.x*dev_reconstructed_volWeigths[0].size.y*dev_reconstructed_volWeigths[0].size.z*sizeof(float),
+  cudaMemcpy(weights, dev_reconstructed_volWeigths[devicesToUse[0]].data,
+    dev_reconstructed_volWeigths[devicesToUse[0]].size.x*dev_reconstructed_volWeigths[devicesToUse[0]].size.y*dev_reconstructed_volWeigths[devicesToUse[0]].size.z*sizeof(float),
     cudaMemcpyDeviceToHost);
+}
+
+
+
+__global__ void psfManualMaskTransform(int numSlices, float* __restrict maskslices,
+  float* __restrict scales, float* __restrict bias2D, Volume<float> outdata,
+  Volume<float> reconstructed_volWeigths, Volume<int> sliceVoxel_count,
+  float* __restrict v_PSF_sums, float* __restrict mask, uint2 vSize,
+  Matrix4* __restrict sliceI2W, Matrix4*  __restrict sliceW2I, Matrix4* __restrict slicesTransformation,
+  Matrix4* __restrict slicesInvTransformation, const float3* __restrict d_slicedim, 
+  float reconVSize, float* __restrict weights, bool disableBiasCorrection)
+{
+
+  const uint3 pos = make_uint3(blockIdx.x* blockDim.x + threadIdx.x,
+    blockIdx.y* blockDim.y + threadIdx.y,
+    blockIdx.z* blockDim.z + threadIdx.z);
+
+  //z is slice index
+  if (pos.z >= numSlices || pos.x >= vSize.x || pos.y >= vSize.y)
+    return;
+
+  unsigned int idx = pos.x + pos.y*vSize.x + pos.z*vSize.x*vSize.y;
+  float s = maskslices[idx];
+  float w = weights[idx];
+  if (s == 0.0f)
+    return;
+
+  float3 sliceDim = d_slicedim[pos.z];
+  s = w * s * scales[pos.z];
+
+  float3 slicePos = make_float3(pos.x, pos.y, 0);
+
+  float size_inv = 2.0f * d_quality_factor / outdata.dim.x;
+  int xDim = round_((sliceDim.x * size_inv));
+  int yDim = round_((sliceDim.y * size_inv));
+  int zDim = round_((sliceDim.z * size_inv));
+
+#if !USE_INFINITE_PSF_SUPPORT
+  int dim = (floor(ceil(sqrt(float(xDim * xDim + yDim * yDim + zDim * zDim)) / d_quality_factor) * 0.5f)) * 2.0f + 3.0f;
+  int centre = (dim - 1) / 2;
+#else 
+  //truncate if value gets close to epsilon
+  int dim = MAX_PSF_SUPPORT;
+  int centre = (MAX_PSF_SUPPORT - 1) / 2;
+#endif
+
+  Matrix4 combInvTrans;
+  combInvTrans = sliceW2I[pos.z] * slicesInvTransformation[pos.z] * d_reconstructedI2W;
+  float3 psfxyz;
+  float3 _psfxyz = d_reconstructedW2I*(slicesTransformation[pos.z] * (sliceI2W[pos.z] * slicePos));
+  psfxyz = make_float3(round_(_psfxyz.x), round_(_psfxyz.y), round_(_psfxyz.z));
+
+  float sume = 0;
+  for (int z = 0; z < dim; z++)
+  {
+    for (int y = 0; y < dim; y++)
+    {
+      float oldPSF = FLT_MAX;
+      for (int x = 0; x < dim; x++)
+      {
+        float3 ofsPos;
+        float psfval = getPSFParamsPrecomp(ofsPos, psfxyz, make_int3(x - centre, y - centre, z - centre), combInvTrans, slicePos, sliceDim);
+        if (abs(oldPSF - psfval) < PSF_EPSILON) continue;
+        oldPSF = psfval;
+
+        uint3 apos = make_uint3(ofsPos.x, ofsPos.y, ofsPos.z);
+        if (apos.x < outdata.size.x && apos.y < outdata.size.y && apos.z < outdata.size.z)
+        {
+          sume += psfval;
+        }
+      }
+    }
+  }
+
+  //fix for crazy values at the border -> too accurate ;)
+  if (sume <= 0.5f)
+    return;
+
+  //float sume = v_PSF_sums[idx];
+  if (sume == 0.0f)
+    return;
+
+  for (float z = 0; z < dim; z++)
+  {
+    for (float y = 0; y < dim; y++)
+    {
+      float oldPSF = FLT_MAX;
+      for (float x = 0; x < dim; x++)
+      {
+        float3 ofsPos;
+        float psfval = getPSFParamsPrecomp(ofsPos, psfxyz, make_int3(x - centre, y - centre, z - centre), combInvTrans, slicePos, sliceDim);
+        if (abs(oldPSF-psfval) < PSF_EPSILON) continue;
+        oldPSF = psfval;
+
+        uint3 apos = make_uint3(round_(ofsPos.x), round_(ofsPos.y), round_(ofsPos.z)); //NN
+        if (apos.x < outdata.size.x && apos.y < outdata.size.y && apos.z < outdata.size.z
+          /*&& mask[apos.x + apos.y*outdata.size.x + apos.z*outdata.size.x*outdata.size.y] != 0*/)
+        {
+          psfval /= sume;
+          atomicAdd(&(outdata.data[apos.x + apos.y*outdata.size.x + apos.z*outdata.size.x*outdata.size.y]),
+           s*psfval);
+        }
+      }
+    }
+  }
+
+}
+
+
+void Reconstruction::transformManualMaskGPU(float* manualMaskdata, unsigned int numSlices, uint2 sliceSize,  float* outdata)
+{
+  //slice size is differnt form slice_volume size
+  printf("transforming manual mask with PSF\n");
+  //we do that only on one device
+  cudaSetDevice(devicesToUse[0]);
+  float* d_manualMaskdata;
+  int dev = devicesToUse[0];
+
+  checkCudaErrors(cudaMalloc((void**)&d_manualMaskdata, sliceSize.x*sliceSize.y*numSlices*sizeof(float)));
+  //cpy to GPU
+  checkCudaErrors(cudaMemcpy(d_manualMaskdata, manualMaskdata, sliceSize.x*sliceSize.y*numSlices*sizeof(float), cudaMemcpyHostToDevice));
+
+  Volume<float> d_outdata;
+  d_outdata.init(dev_reconstructed_[dev].size,dev_reconstructed_[dev].dim);
+  printf("%d %d %d \n", d_outdata.size.x,d_outdata.size.y,d_outdata.size.z);
+  unsigned int N = d_outdata.size.x*d_outdata.size.y*d_outdata.size.z;
+  cudaMemset(d_outdata.data, 0, N*sizeof(float));
+
+  printf("%d %d %d %d\n", dev_v_slices[dev].size.x, dev_v_slices[dev].size.y, sliceSize.x, sliceSize.y);
+  //transform with PSF kernel (d_outdata, transformations, 
+  //run kernel statically for first numSlices slices = num slices in manualMaskdata
+  //enter values with PSF loop
+
+  dim3 blockSize3 = dim3(8, 8, 8);
+  dim3 gridSize3 = divup(dim3(dev_v_slices[dev].size.x, dev_v_slices[dev].size.y, numSlices), blockSize3);
+  //dim3 gridSize3 = divup(dim3(sliceSize.x, sliceSize.y, numSlices), blockSize3);
+
+  psfManualMaskTransform <<< gridSize3, blockSize3 >>>(numSlices,
+    d_manualMaskdata, 
+    dev_d_scales[dev], 
+    dev_v_bias[dev].data,
+    d_outdata, 
+    dev_reconstructed_volWeigths[dev],
+    dev_sliceVoxel_count_[dev], 
+    dev_v_PSF_sums_[dev].data, 
+    dev_mask_[dev].data,
+    sliceSize, 
+    dev_d_slicesI2W[dev], dev_d_slicesW2I[dev],
+    dev_d_slicesTransformation[dev], 
+    dev_d_slicesInvTransformation[dev], 
+    dev_d_sliceDims[dev], 
+    reconstructedVoxelSize,
+    dev_v_weights[dev].data,
+    _disableBiasC);
+
+  checkCudaErrors(cudaMemcpy(outdata, d_outdata.data, d_outdata.size.x*d_outdata.size.y*
+    d_outdata.size.z*sizeof(float), cudaMemcpyDeviceToHost));
+   checkCudaErrors(cudaDeviceSynchronize());
+
 }
 

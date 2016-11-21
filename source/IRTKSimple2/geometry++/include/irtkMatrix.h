@@ -18,6 +18,8 @@ See LICENSE for details
 
 #define _IRTKMATRIX_H
 
+#include <float.h>
+
 #ifdef USE_VXL
 #include <vnl/vnl_matrix.h>
 #else
