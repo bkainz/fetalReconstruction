@@ -35,6 +35,9 @@ $ PVRreconstructionGPU -i <path-to-input-data> -o <reconstructed-image-filename>
 $ SVRreconstructionGPU -i <path-to-input-data> -o <reconstructed-image-filename> --resolution <1> 
 ```
 
+# TODO
+* the maximum patch size is currently limited by the abilities of the used GPU. A maximum size of 64x64 is safe for average high end cards. This issue will be fixed soon.
+
 # References
 
 * [[arxiv16]]() "PVR: Patch-to-Volume Reconstruction for Large Area Motion Correction of Fetal MRI." Amir Alansary, Bernhard Kainz, Martin Rajchl, Maria Murgasova,  Mellisa Damodaram, David F.A. Lloyd, Steven G. McDonagh, Alice Davidson, Mary Rutherford, Reza Razavi, Joseph V. Hajnal, and Daniel Rueckert.
