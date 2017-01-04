@@ -38,6 +38,7 @@ $ SVRreconstructionGPU -i <path-to-input-data> -o <reconstructed-image-filename>
 # TODO
 * the maximum patch size is currently limited by the abilities of the used GPU. A maximum size of 64x64 is safe for average high end cards. This issue will be fixed soon.
 
+
 # References
 
 * [[arxiv16]]() "PVR: Patch-to-Volume Reconstruction for Large Area Motion Correction of Fetal MRI." Amir Alansary, Bernhard Kainz, Martin Rajchl, Maria Murgasova,  Mellisa Damodaram, David F.A. Lloyd, Steven G. McDonagh, Alice Davidson, Mary Rutherford, Reza Razavi, Joseph V. Hajnal, and Daniel Rueckert.
@@ -51,6 +52,28 @@ PVR is licensed under the [MIT license ![MIT](https://raw.githubusercontent.com/
 
 ---------------------------------------------------
 
+The following are compilation notes by Shadab Khan <skhan.shadab@gmail.com> for MacOS:
+
+1) Copied zlib.h and zconf.h from zlib-1.2.5 (which I downloaded from sourceforge) and pasted inside irtk2/nifti/zlib/. Renamed original zlib to zlib_old
+-> This issue occurs because OS X uses zlib version 1.2.5 internally (located in /usr/lib and /usr/include) which cannot be modified by the user. Version 1.2.5 (used by OS X) doesn't contain all functions in 1.2.7 (shipped with fetal-reconstruction source), hence the problem occurs. This is a quick fix, I am forcing functionality available in zlib 1.2.5 which doesn't seem to affect any of file i/o. I should find proper CMake commands to explicitly link against user defined zlib.
+
+2) fetalReconstruction-master/source/IRTKSimple2/geometry++/include/irtkMatrix.h
+ERROR: friend declaration specifying a default argument must be a definition
+Commented line 175: friend irtkMatrix FrechetMean(irtkMatrix *, int, int = 10);
+Commented line 177: friend irtkMatrix FrechetMean(irtkMatrix *, double *, int, int = 10);
+
+This in turn required commenting two other lines (see below)
+
+3) fetalReconstruction-master/source/IRTKSimple2/packages/transformation/src/irtkTemporalHomogeneousTransformation.cc
+Commented line 59: _transformMatrix = FrechetMean(M, weight, 4);
+Commented line 119: _transformMatrix = FrechetMean(M, weight, 2);
+
+4) helper_cuda.h not found:
+Copied headers from CUDA_DIR/Samples/common/inc/ to CUDA_DIR/include/
+
+5) Added following to CMakeLists.txt inside /source: set(CMAKE_CXX_FLAGS "-Wno-c++11-narrowing")
+
+---------------------------------------------------
 
 # SVR - Slice to Volume Reconstruction
 
