@@ -469,8 +469,11 @@ void irtkPatchBasedReconstruction<T>::run()
                 }
                 else
                 {
-                    printf("registration patches of stack %d GPU\n", i);
-                    patchRegistrators[i]->run();
+                    printf("registration patches of stack %d \n", i);
+                    // TODO: needs integration of treereduction
+                    //patchRegistrators[i]->run();
+                    //CPU reg for now
+                    patchRegistrators[i]->runHybrid();
                 }
 
                 pt::ptime now = pt::microsec_clock::local_time();
