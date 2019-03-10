@@ -1786,7 +1786,10 @@ __global__ void transformBiasMean(int numSlices,
 template< typename T >
 class divS
 {
-public:
+public: 
+#if CUDA_VERSION >= 7500
+  __device__
+#endif
   T operator()(T a, T b)
   {
     return (b != 0) ? a / b : 0;
@@ -2503,6 +2506,9 @@ template< typename T >
 class divexp
 {
 public:
+#if CUDA_VERSION >= 7500
+  __device__
+#endif
   T operator()(T a, T b)
   {
     return  (a != -1.0) ? (a / exp(-b)) : a;
