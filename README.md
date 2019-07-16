@@ -88,6 +88,8 @@ in print, 2015. doi:10.1109/TMI.2015.2415453
 
 # Announcements
 
+- check out Michael Ebner's work improving upon our work with his slower but more recent and more robust framework [NiftyMIC](https://github.com/gift-surg/NiftyMIC)
+
 - The --useCPU flag has some bug currently and might have caused some confusion. CPU only does not  provide
    the full functionality of the GPU version. For example PSF sampling is different and the result of the 
    CPU version will be worse. -- I am working on it.
