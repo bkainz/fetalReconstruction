@@ -34,6 +34,30 @@ $ PVRreconstructionGPU -i <path-to-input-data> -o <reconstructed-image-filename>
 ```shell
 $ SVRreconstructionGPU -i <path-to-input-data> -o <reconstructed-image-filename> --resolution <1> 
 ```
+# Docker
+
+thanks to <a href="https://github.com/dittothat">Jeff Stout</a> there is a docker container available. 
+from <a href="https://github.com/dittothat">dittohat</a>'s post:
+
+<a href="https://github.com/dittothat">Docker image</a>
+
+<a href="https://github.com/dittothat/dockerfetalrecon/blob/master/Dockerfile">Dockerfile</a>
+
+On a system with nvidia-docker installed (Docker 19.03 only requires that you use the --gpus option), do:
+
+`docker pull dittothat/fetalreconstruction:cuda6.5`
+
+Then you can run using:
+
+`docker run --gpus all -it --mount type=bind,source=<host path to data>,target=/data dittothat/fetalreconstruction:cuda6.5 /bin/bash`
+
+Inside the container:
+
+`cd /usr/src/fetalReconstruction/data`
+`PVRreconstructionGPU -o 3TReconstruction.nii.gz -i 14_3T_nody_001.nii.gz 10_3T_nody_001.nii.gz 21_3T_nody_001.nii.gz 23_3T_nody_001.nii.gz -m mask_10_3T_brain_smooth.nii.gz --resolution 1.0`
+
+Data you wish to process can be put in whatever path you specify, and is then located at /data/ in the container.
+
 
 # TODO
 * the maximum patch size is currently limited by the abilities of the used GPU. A maximum size of 64x64 is safe for average high end cards. This issue will be fixed soon.
@@ -134,6 +158,7 @@ ONLY THE GPU ACCELERATED VERSION WILL PROVIDE ALL IN THE PAPER DESCRIBED FEATURE
 * make a new directory "build"
 * execute cmake .. in this directory (give paths to TBB and other third party libs if necessary using cmakegui .. or ccmake ..)
 * make or open the Visual Studio Solution 
+
 
 # Usage
 
